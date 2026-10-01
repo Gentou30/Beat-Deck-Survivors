@@ -4,15 +4,21 @@ extends Node
 
 signal beat(n: int)
 
-const BPM := 120.0
 const MIX_RATE := 22050
 const LOOP_BEATS := 8
-## CC0 track "Party Sector" (Joth), 120 BPM, first beat at ~0 s. 192 beats = 96.0 s
-## (the file is ~52 ms longer, so we restart at 96.0 s instead of using stream looping).
-const MUSIC_PATH := "res://assets/music/party_sector.mp3"
-const MUSIC_BEATS := 192
+## CC0 tracks by Joth (opengameart.org). bpm/beats were measured; the files are ~50-70 ms
+## longer than `beats`, so we restart playback at exactly `beats` instead of stream looping.
+## offset = time of the first beat inside the file (seconds).
+const TRACKS := [
+	{"name": "Party Sector", "path": "res://assets/music/party_sector.mp3", "bpm": 120.0, "beats": 192, "offset": 0.0},
+	{"name": "Dreaming of Victory", "path": "res://assets/music/dreaming_of_victory.mp3", "bpm": 120.0, "beats": 208, "offset": -0.04},
+	{"name": "Porkymon Battle", "path": "res://assets/music/pkmn_battle_main.mp3", "bpm": 148.0, "beats": 64, "offset": 0.0},
+]
 
-var spb: float = 60.0 / BPM
+var track_idx := 0
+var bpm := 120.0
+var track_offset := 0.0
+var spb: float = 0.5
 var song_time: float = 0.0
 var running: bool = false
 var clock_only: bool = false  # headless / tests: ignore audio position
@@ -27,14 +33,8 @@ var _manual_loop := false
 
 func _ready() -> void:
 	clock_only = DisplayServer.get_name() == "headless"
-	_loop_len = spb * LOOP_BEATS
 	_music = AudioStreamPlayer.new()
-	if ResourceLoader.exists(MUSIC_PATH):
-		_music.stream = load(MUSIC_PATH)
-		_loop_len = spb * MUSIC_BEATS
-		_manual_loop = true
-	else:
-		_music.stream = _make_music()
+	_apply_track(0)
 	_music.volume_db = -6.0
 	_music.bus = "Music"
 	add_child(_music)
@@ -59,14 +59,57 @@ func _ready() -> void:
 		add_child(p)
 		_sfx[k] = p
 
-func start() -> void:
+func _apply_track(i: int) -> void:
+	track_idx = i
+	var t: Dictionary = TRACKS[i]
+	bpm = t["bpm"]
+	spb = 60.0 / bpm
+	track_offset = t["offset"]
+	if ResourceLoader.exists(t["path"]):
+		_music.stream = load(t["path"])
+		_loop_len = spb * int(t["beats"])
+		_manual_loop = true
+	else:
+		bpm = 120.0
+		spb = 0.5
+		track_offset = 0.0
+		_music.stream = _make_music()
+		_loop_len = spb * LOOP_BEATS
+		_manual_loop = false
+
+func _reset_clock() -> void:
 	song_time = 0.0
 	_loops = 0
 	_last_pos = 0.0
 	_last_beat = -1
+
+func start() -> void:
+	_reset_clock()
 	running = true
 	if not clock_only:
 		_music.play()
+
+## Switch to another track (restarts the song / beat clock).
+func set_track(i: int) -> void:
+	i = clampi(i, 0, TRACKS.size() - 1)
+	var was_playing := running and not clock_only
+	_music.stop()
+	_apply_track(i)
+	_reset_clock()
+	if was_playing:
+		_music.play()
+
+## Pick the BGM for a battle: mode >= 0 fixed track, -1 random (different from current).
+func choose_for_battle(mode: int) -> void:
+	if mode >= 0:
+		if mode != track_idx:
+			set_track(mode)
+		return
+	var opts: Array = []
+	for i in TRACKS.size():
+		if i != track_idx:
+			opts.append(i)
+	set_track(opts.pick_random())
 
 func play_sfx(kind: String) -> void:
 	if clock_only or not _sfx.has(kind):
@@ -75,7 +118,7 @@ func play_sfx(kind: String) -> void:
 
 var offset: float:
 	get:
-		return Settings.offset_ms / 1000.0
+		return Settings.offset_ms / 1000.0 + track_offset
 
 func set_paused(p: bool) -> void:
 	running = not p
@@ -83,7 +126,7 @@ func set_paused(p: bool) -> void:
 
 ## Offset ignoring the user setting (used by the calibration screen).
 func raw_beat_offset() -> float:
-	var phase := fposmod(song_time, spb)
+	var phase := fposmod(song_time - track_offset, spb)
 	return phase if phase < spb * 0.5 else phase - spb
 
 func _process(delta: float) -> void:

@@ -128,6 +128,7 @@ func _start_battle(kind: String) -> void:
 		diff = 1.0 + maxf(0.0, run.floor_idx) * 0.5
 	else:
 		diff = 1.0 + run.wave * 0.35
+	Conductor.choose_for_battle(Settings.bgm)
 	battle = Battle.new()
 	battle.setup(run, kind, diff, ui)
 	if _autotest:
@@ -364,7 +365,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if fade > 0.3:
 		return
 	if state == S.SPLASH:
-		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) 				or (event is InputEventScreenTouch and event.pressed):
+		# Touch: start on RELEASE - mobile browsers only grant audio on touchend/click, not touchstart.
+		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) 				or (event is InputEventScreenTouch and not event.pressed):
 			if event is InputEventScreenTouch:
 				touch_mode = true
 			_begin()
@@ -503,6 +505,14 @@ func _click(id: String) -> void:
 			Settings.offset_ms = maxi(-200, Settings.offset_ms - 5)
 		"off+":
 			Settings.offset_ms = mini(200, Settings.offset_ms + 5)
+		"bgm-", "bgm+":
+			var n: int = Conductor.TRACKS.size() + 1  # -1 (random) + each track
+			var cur: int = Settings.bgm + 1
+			cur = (cur + (1 if id == "bgm+" else n - 1)) % n
+			Settings.bgm = cur - 1
+			if Settings.bgm >= 0:
+				Conductor.set_track(Settings.bgm)  # preview
+			Settings.save_cfg()
 		"shake":
 			Settings.shake = not Settings.shake
 			Settings.save_cfg()
@@ -748,6 +758,7 @@ func _draw_menu(c: Control) -> void:
 	var st: Dictionary = Settings.stats
 	ui.center(c, "プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d" % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 665.0, 14, Color(0.7, 0.7, 0.85))
 	ui.text(c, "CC0素材: Kenney / Joth", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
+	ui.text(c, "♪ %s - Joth (CC0)" % Conductor.TRACKS[Conductor.track_idx]["name"], Vector2(0, H - 12), 11, Color(0.6, 0.6, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 16.0)
 
 func _draw_mode(c: Control) -> void:
 	_bg(c)
@@ -817,7 +828,12 @@ func _draw_settings(c: Control) -> void:
 	ui.button(c, "shake", Rect2(SL_X, 396.0, 160.0, 38.0), "ON" if Settings.shake else "OFF", true, Color(0.5, 0.9, 0.6) if Settings.shake else Color(0.6, 0.6, 0.7), 20)
 	ui.text(c, "フルスクリーン", Vector2(x, 480), 22, Color.WHITE)
 	ui.button(c, "fullscreen", Rect2(SL_X, 456.0, 160.0, 38.0), "ON" if Settings.fullscreen else "OFF", true, Color(0.5, 0.9, 0.6) if Settings.fullscreen else Color(0.6, 0.6, 0.7), 20)
-	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 580.0, 240.0, 52.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
+	ui.text(c, "BGM", Vector2(x, 540), 22, Color.WHITE)
+	ui.button(c, "bgm-", Rect2(SL_X, 516.0, 56.0, 38.0), "◀", true, Color(0.6, 0.6, 0.9), 20)
+	var bname := "ランダム (戦闘ごと)" if Settings.bgm < 0 else "%s  (%d BPM)" % [Conductor.TRACKS[Settings.bgm]["name"], int(Conductor.TRACKS[Settings.bgm]["bpm"])]
+	ui.text(c, bname, Vector2(SL_X + 60.0, 542), 18, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
+	ui.button(c, "bgm+", Rect2(SL_X + 364.0, 516.0, 56.0, 38.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
+	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 610.0, 240.0, 52.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
 	var cx := 1060.0
 	c.draw_circle(Vector2(cx, 300), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
 	c.draw_arc(Vector2(cx, 300), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)

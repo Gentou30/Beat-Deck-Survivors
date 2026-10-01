@@ -8,6 +8,7 @@ var sfx_vol := 0.8
 var offset_ms := 0
 var shake := true
 var fullscreen := false
+var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
 var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0}
 
 func _ready() -> void:
@@ -34,6 +35,7 @@ func load_cfg() -> void:
 	offset_ms = cf.get_value("game", "offset_ms", offset_ms)
 	shake = cf.get_value("game", "shake", shake)
 	fullscreen = cf.get_value("game", "fullscreen", fullscreen)
+	bgm = cf.get_value("game", "bgm", bgm)
 	for k in stats:
 		stats[k] = cf.get_value("stats", k, stats[k])
 
@@ -47,6 +49,7 @@ func save_cfg() -> void:
 	cf.set_value("game", "offset_ms", offset_ms)
 	cf.set_value("game", "shake", shake)
 	cf.set_value("game", "fullscreen", fullscreen)
+	cf.set_value("game", "bgm", bgm)
 	for k in stats:
 		cf.set_value("stats", k, stats[k])
 	cf.save(PATH)

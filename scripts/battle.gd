@@ -78,6 +78,8 @@ var kills := 0
 var time_left := 24.0
 var spawning := true
 var beat_count := 0
+var energy_t := 0.0
+var spawn_acc := 0.0
 var blade_beats := 0
 var blade_n := 3
 var blade_power := 1.0
@@ -312,7 +314,9 @@ func on_beat(_n: int) -> void:
 		frenzy_beats -= 1
 	if slow_beats > 0:
 		slow_beats -= 1
-	if beat_count % 2 == 0:
+	energy_t += Conductor.spb  # 1 energy per second regardless of BPM
+	if energy_t >= 1.0:
+		energy_t -= 1.0
 		energy = mini(max_energy, energy + 1)
 	if fort > 0 and beat_count % 4 == 0:
 		shield = mini(60, shield + fort)
@@ -324,7 +328,9 @@ func on_beat(_n: int) -> void:
 		_fire_bolt((targets[i] as Enemy).pos, adm * dmg_mult(), 0.0)
 	# spawning
 	if spawning and enemies.size() < 110 and (kind != "boss" or beat_count % 2 == 0):
-		var n := 1 + int(diff / 2.0)
+		spawn_acc += (1 + int(diff / 2.0)) * Conductor.spb / 0.5  # same spawns per second at any BPM
+		var n := int(spawn_acc)
+		spawn_acc -= n
 		for i in n:
 			var k := "grunt"
 			var r := randf()

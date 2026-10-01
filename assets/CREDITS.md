@@ -1,2 +1,4 @@
 - DotGothic16 font (c) The DotGothic16 Project Authors - SIL Open Font License 1.1 - https://github.com/google/fonts/tree/main/ofl/dotgothic16  (assets/fonts/, license: OFL.txt)
 - "Party Sector" by Joth - CC0 - https://opengameart.org/content/party-sector  (assets/music/party_sector.mp3, 120 BPM). The procedural music in scripts/conductor.gd remains as a fallback if the file is missing.
+- "Dreaming of Victory" by Joth - CC0 - https://opengameart.org/content/dreaming-of-victory  (assets/music/dreaming_of_victory.mp3, 120 BPM)
+- "Porkymon Battle Theme" (Main 1.1) by Joth - CC0 - https://opengameart.org/content/porkymon-battle-theme  (assets/music/pkmn_battle_main.mp3, 148 BPM)
