@@ -104,16 +104,16 @@ static func def(id: String) -> Dictionary:
 			cost = plus["cost"]
 	var t: String = b["type"]
 	return {
-		"name": String(b["name"]) + ("+" if up else ""),
+		"name": Loc.t(String(b["name"])) + ("+" if up else ""),
 		"cost": cost, "type": t, "color": b["color"], "p": p,
-		"desc": String(b["tmpl"]).format(p),
+		"desc": Loc.t(String(b["tmpl"])).format(p),
 		"exhaust": b.get("exhaust", false) or t == "power",
 		"up": up,
 	}
 
 ## One-line effect summary shown when a card is played.
 static func short(id: String) -> String:
-	return String(SHORT[base_id(id)]).format(def(id)["p"])
+	return Loc.t(String(SHORT[base_id(id)])).format(def(id)["p"])
 
 static func upgrade(id: String) -> String:
 	return id if is_upgraded(id) else id + "+"

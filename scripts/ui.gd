@@ -11,6 +11,9 @@ var buttons: Array = []  # {id, rect}
 var mouse := Vector2.ZERO
 var time := 0.0
 var touch := false
+var pad := false
+var focus_id := ""
+const PAD_KEYS := ["A", "B", "X", "Y", "RB"]
 var _tiles := {}
 var _hover_id := ""
 
@@ -40,14 +43,21 @@ func _reg(id: String, rect: Rect2) -> bool:
 func button_hit(_c: Control, id: String, r: Rect2) -> bool:
 	return _reg(id, r)
 
+## Translated draw_string / draw_multiline_string (all UI text goes through these).
+func ds(c: CanvasItem, pos: Vector2, s: String, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, size := 16, col := Color.WHITE) -> void:
+	c.draw_string(font, pos, Loc.t(s), align, width, size, col)
+
+func dms(c: CanvasItem, pos: Vector2, s: String, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, size := 16, max_lines := -1, col := Color.WHITE) -> void:
+	c.draw_multiline_string(font, pos, Loc.t(s), align, width, size, max_lines, col)
+
 func tile(i: int) -> Texture2D:
 	if not _tiles.has(i):
 		_tiles[i] = load("res://assets/kenney_tiny_dungeon/tile_%04d.png" % i)
 	return _tiles[i]
 
 func text(c: Control, s: String, pos: Vector2, size: int, col: Color, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
-	c.draw_string(font, pos + Vector2(1, 1), s, align, width, size, Color(0, 0, 0, col.a * 0.6))
-	c.draw_string(font, pos, s, align, width, size, col)
+	ds(c, pos + Vector2(1, 1), s, align, width, size, Color(0, 0, 0, col.a * 0.6))
+	ds(c, pos, s, align, width, size, col)
 
 func center(c: Control, s: String, y: float, size: int, col: Color) -> void:
 	text(c, s, Vector2(0, y), size, col, HORIZONTAL_ALIGNMENT_CENTER, W)
@@ -58,7 +68,7 @@ func panel(c: Control, r: Rect2, fill := Color(0.08, 0.07, 0.13, 0.92), border :
 	c.draw_rect(r, border, false, bw)
 
 func button(c: Control, id: String, r: Rect2, label: String, enabled := true, accent := Color(0.55, 0.5, 0.95), size := 24) -> void:
-	var h := _reg(id, r) and enabled
+	var h := (_reg(id, r) or id == focus_id) and enabled
 	var pulse := 0.5 + 0.5 * sin(time * 6.0)
 	var rr := r
 	if h:
@@ -75,7 +85,7 @@ func button(c: Control, id: String, r: Rect2, label: String, enabled := true, ac
 		bc = bc.lerp(Color.WHITE, 0.35 + 0.25 * pulse)
 	c.draw_rect(rr, bc, false, 3.0 if h else 2.0)
 	var col := Color.WHITE if enabled else Color(0.55, 0.55, 0.6)
-	c.draw_string(font, Vector2(rr.position.x, rr.position.y + rr.size.y / 2.0 + size * 0.35), label, HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, size, col)
+	ds(c, Vector2(rr.position.x, rr.position.y + rr.size.y / 2.0 + size * 0.35), label, HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, size, col)
 
 func bar(c: Control, r: Rect2, frac: float, fill: Color, back := Color(0.12, 0.06, 0.1)) -> void:
 	c.draw_rect(r, back)
@@ -95,7 +105,7 @@ func card(c: Control, id: String, r: Rect2, key: String, usable := true, sel := 
 	var d: Dictionary = Cards.def(id)
 	var h := false
 	if reg_id != "":
-		h = _reg(reg_id, r)
+		h = _reg(reg_id, r) or reg_id == focus_id
 	var rr := r
 	if h and usable:
 		rr = Rect2(r.position + Vector2(0, -14), r.size)
@@ -109,16 +119,18 @@ func card(c: Control, id: String, r: Rect2, key: String, usable := true, sel := 
 		bcol = col.lerp(Color.WHITE, 0.5)
 	c.draw_rect(rr, bcol, false, 3.0 if (sel or h) else 2.0)
 	c.draw_circle(rr.position + Vector2(18, 18), 13.0, Color(0.15, 0.3, 0.8, dim))
-	c.draw_string(font, rr.position + Vector2(8, 25), str(d["cost"]), HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color(1, 1, 1, dim))
+	ds(c, rr.position + Vector2(8, 25), str(d["cost"]), HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color(1, 1, 1, dim))
 	var nm_col := Color(0.6, 1.0, 0.6, dim) if d["up"] else Color(1, 1, 1, dim)
-	c.draw_string(font, rr.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 40.0, 13, nm_col)
-	c.draw_string(font, rr.position + Vector2(10, 56), Cards.TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
-	c.draw_multiline_string(font, rr.position + Vector2(10, 84), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 14, -1, Color(0.9, 0.9, 0.95, dim))
-	var art_r := Rect2(rr.position.x + rr.size.x / 2.0 - 21.0, rr.end.y - 62.0, 42.0, 42.0)
-	c.draw_circle(art_r.get_center(), 24.0, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.7 * dim))
+	ds(c, rr.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 40.0, 13, nm_col)
+	ds(c, rr.position + Vector2(10, 56), Cards.TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
+	dms(c, rr.position + Vector2(10, 84), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 14, -1, Color(0.9, 0.9, 0.95, dim))
+	var art_r := Rect2(rr.end.x - 46.0, rr.position.y + 40.0, 32.0, 32.0)
+	c.draw_circle(art_r.get_center(), 19.0, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.7 * dim))
 	c.draw_texture_rect(tile(Cards.art(id)), art_r, false, Color(1, 1, 1, dim))
+	if key != "" and pad and key.is_valid_int():
+		key = PAD_KEYS[clampi(int(key) - 1, 0, 4)]
 	if key != "" and not touch:
-		c.draw_string(font, rr.position + Vector2(0, rr.size.y - 8), "[" + key + "]", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 14, Color(1, 1, 1, 0.5 * dim))
+		ds(c, rr.position + Vector2(0, rr.size.y - 8), "[" + key + "]", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 14, Color(1, 1, 1, 0.5 * dim))
 	return h
 
 ## Compact one-line card for deck lists.
@@ -131,9 +143,9 @@ func mini_card(c: Control, id: String, r: Rect2, reg_id := "", sel := false) -> 
 	c.draw_rect(r, Color(col.r * 0.25, col.g * 0.25, col.b * 0.25, 0.95) if not h else Color(col.r * 0.5, col.g * 0.5, col.b * 0.5, 0.98))
 	c.draw_rect(r, col.lerp(Color.WHITE, 0.5) if (h or sel) else col, false, 2.0)
 	c.draw_circle(r.position + Vector2(16, r.size.y / 2.0), 11.0, Color(0.15, 0.3, 0.8))
-	c.draw_string(font, r.position + Vector2(6, r.size.y / 2.0 + 6), str(d["cost"]), HORIZONTAL_ALIGNMENT_CENTER, 20.0, 15)
-	c.draw_string(font, r.position + Vector2(34, 22), d["name"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 15, Color(0.6, 1.0, 0.6) if d["up"] else Color.WHITE)
-	c.draw_string(font, r.position + Vector2(34, 42), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 10, Color(0.85, 0.85, 0.9))
+	ds(c, r.position + Vector2(6, r.size.y / 2.0 + 6), str(d["cost"]), HORIZONTAL_ALIGNMENT_CENTER, 20.0, 15)
+	ds(c, r.position + Vector2(34, 22), d["name"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 15, Color(0.6, 1.0, 0.6) if d["up"] else Color.WHITE)
+	ds(c, r.position + Vector2(34, 42), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 10, Color(0.85, 0.85, 0.9))
 	return h
 
 func relic_icon(c: Control, id: String, r: Rect2, reg_id: String) -> bool:
@@ -142,7 +154,7 @@ func relic_icon(c: Control, id: String, r: Rect2, reg_id: String) -> bool:
 	var col: Color = d["color"]
 	c.draw_rect(r, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3))
 	c.draw_rect(r, col.lerp(Color.WHITE, 0.4 if h else 0.0), false, 2.0)
-	c.draw_string(font, Vector2(r.position.x, r.position.y + r.size.y * 0.7), String(d["name"]).substr(0, 1), HORIZONTAL_ALIGNMENT_CENTER, r.size.x, int(r.size.y * 0.6), col.lerp(Color.WHITE, 0.4))
+	ds(c, Vector2(r.position.x, r.position.y + r.size.y * 0.7), Loc.t(String(d["name"])).substr(0, 1), HORIZONTAL_ALIGNMENT_CENTER, r.size.x, int(r.size.y * 0.6), col.lerp(Color.WHITE, 0.4))
 	return h
 
 func tooltip(c: Control, title: String, body: String, anchor: Vector2) -> void:
@@ -151,4 +163,4 @@ func tooltip(c: Control, title: String, body: String, anchor: Vector2) -> void:
 	r.position.x = minf(r.position.x, W - w - 10.0)
 	panel(c, r, Color(0.05, 0.05, 0.1, 0.97), Color(1, 0.9, 0.5, 0.9))
 	text(c, title, r.position + Vector2(10, 24), 18, Color(1, 0.9, 0.5))
-	c.draw_multiline_string(font, r.position + Vector2(10, 46), body, HORIZONTAL_ALIGNMENT_LEFT, w - 20.0, 14, -1, Color(0.9, 0.9, 0.95))
+	dms(c, r.position + Vector2(10, 46), body, HORIZONTAL_ALIGNMENT_LEFT, w - 20.0, 14, -1, Color(0.9, 0.9, 0.95))

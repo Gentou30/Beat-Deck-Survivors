@@ -11,6 +11,9 @@ var offset_ms := 0
 var shake := true
 var fullscreen := false
 var tutorial_done := false
+var lang := "ja"
+var reduce_flash := false
+var assist := 0  # 0 off, 1 wide, 2 very wide timing windows
 var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
 var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0,
 	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1}
@@ -29,6 +32,7 @@ func _ready() -> void:
 	var mi := AudioServer.get_bus_index("Music")
 	AudioServer.add_bus_effect(mi, lp, 0)
 	AudioServer.set_bus_effect_enabled(mi, 0, false)
+	lang = "ja" if OS.get_locale_language() == "ja" else "en"
 	load_cfg()
 	apply()
 
@@ -49,6 +53,9 @@ func load_cfg() -> void:
 	fullscreen = cf.get_value("game", "fullscreen", fullscreen)
 	bgm = cf.get_value("game", "bgm", bgm)
 	tutorial_done = cf.get_value("game", "tutorial_done", tutorial_done)
+	lang = cf.get_value("game", "lang", lang)
+	reduce_flash = cf.get_value("game", "reduce_flash", reduce_flash)
+	assist = cf.get_value("game", "assist", assist)
 	for k in stats:
 		stats[k] = cf.get_value("stats", k, stats[k])
 	for id in Achievements.DB:
@@ -72,6 +79,9 @@ func save_cfg() -> void:
 	cf.set_value("game", "fullscreen", fullscreen)
 	cf.set_value("game", "bgm", bgm)
 	cf.set_value("game", "tutorial_done", tutorial_done)
+	cf.set_value("game", "lang", lang)
+	cf.set_value("game", "reduce_flash", reduce_flash)
+	cf.set_value("game", "assist", assist)
 	for k in stats:
 		cf.set_value("stats", k, stats[k])
 	for id in ach:

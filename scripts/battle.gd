@@ -203,7 +203,7 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 		"tutorial":
 			banner = ""
 		"endless":
-			banner = "ウェーブ %d" % (run.wave + 1)
+			banner = Loc.t("ウェーブ %d") % (run.wave + 1)
 		_:
 			banner = "バトル開始"
 	banner_time = 2.2
@@ -218,10 +218,10 @@ func dispose() -> void:
 # ---- helpers ---------------------------------------------------------------
 
 func perfect_window() -> float:
-	return PERFECT_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
+	return 0.03 * Settings.assist + PERFECT_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
 
 func good_window() -> float:
-	return GOOD_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
+	return 0.03 * Settings.assist + GOOD_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
 
 func dmg_mult() -> float:
 	var per := (0.03 if run.has_relic("amp") else 0.02) + (0.01 if run.char_id == "drummer" else 0.0)
@@ -477,7 +477,7 @@ func do_shake(a: float) -> void:
 
 func flash(col: Color, a: float) -> void:
 	flash_col = col
-	flash_a = maxf(flash_a, a)
+	flash_a = maxf(flash_a, a * (0.25 if Settings.reduce_flash else 1.0))
 
 # ---- simulation ------------------------------------------------------------
 
@@ -661,6 +661,14 @@ func update(delta: float) -> void:
 func move_dir() -> Vector2:
 	if touch_dir.length() > 0.0:
 		return touch_dir
+	var jv := Vector2(Input.get_joy_axis(0, JOY_AXIS_LEFT_X), Input.get_joy_axis(0, JOY_AXIS_LEFT_Y))
+	if jv.length() < 0.25:
+		jv = Vector2.ZERO
+	jv += Vector2(
+		float(Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)) - float(Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT)),
+		float(Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_DOWN)) - float(Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_UP)))
+	if jv.length() > 0.0:
+		return jv.limit_length(1.0)
 	return Vector2(
 		float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
 		float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)))
@@ -1022,7 +1030,7 @@ func _draw_tutorial(c: Control) -> void:
 	var r := Rect2(cx - 330.0, 104.0, 660.0, 92.0)
 	ui.panel(c, r, Color(0.04, 0.1, 0.06, 0.92), Color(0.5, 1.0, 0.6, 0.9))
 	ui.text(c, "STEP %d / %d" % [tut_step + 1, TUT_STEPS.size()], r.position + Vector2(14, 22), 14, Color(0.6, 1.0, 0.7))
-	c.draw_multiline_string(ui.font, r.position + Vector2(14, 46), TUT_STEPS[tut_step]["text"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 17, 2, Color(1, 1, 1))
+	ui.dms(c, r.position + Vector2(14, 46), TUT_STEPS[tut_step]["text"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 17, 2, Color(1, 1, 1))
 	ui.bar(c, Rect2(r.position.x + 14, r.end.y - 14, r.size.x - 28, 6), tut_progress(), Color(0.5, 1.0, 0.6), Color(0.1, 0.2, 0.12))
 	if tut_step >= 1 and tut_step <= 3:
 		var a := 0.5 + 0.5 * sin(elapsed * 8.0)
@@ -1385,8 +1393,8 @@ func draw_world(c: Node2D) -> void:
 			"text":
 				var rise := 34.0 * (1.0 - k)
 				var pop := 1.0 + 0.5 * maxf(0.0, k - 0.8) * 5.0
-				c.draw_string(ui.font, f.pos + Vector2(-60, -rise + 1), f.text, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(f.size * pop), Color(0, 0, 0, k))
-				c.draw_string(ui.font, f.pos + Vector2(-60, -rise), f.text, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(f.size * pop), Color(f.color, minf(1.0, k * 2.0)))
+				ui.ds(c, f.pos + Vector2(-60, -rise + 1), f.text, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(f.size * pop), Color(0, 0, 0, k))
+				ui.ds(c, f.pos + Vector2(-60, -rise), f.text, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(f.size * pop), Color(f.color, minf(1.0, k * 2.0)))
 	c.draw_set_transform_matrix(Transform2D.IDENTITY)
 	# screen overlays
 	var hp_frac := float(run.hp) / float(run.max_hp)
@@ -1457,10 +1465,10 @@ func _draw_cast(c: Node2D) -> void:
 	var py := maxf(130.0, player_pos.y - 100.0 - 12.0 * (1.0 - k))
 	c.draw_rect(Rect2(px - 130, py - 24, 260, 50), Color(0, 0, 0, 0.5 * a))
 	c.draw_rect(Rect2(px - 130, py - 24, 4, 50), Color(cast_col, a))
-	c.draw_string(ui.font, Vector2(px - 120, py - 3), cast_name, HORIZONTAL_ALIGNMENT_LEFT, 170.0, 19, Color(cast_col.lerp(Color.WHITE, 0.35), a))
+	ui.ds(c, Vector2(px - 120, py - 3), cast_name, HORIZONTAL_ALIGNMENT_LEFT, 170.0, 19, Color(cast_col.lerp(Color.WHITE, 0.35), a))
 	var gcol := Color(1.0, 0.9, 0.3) if cast_grade == "PERFECT" else (Color(0.5, 0.9, 1.0) if cast_grade == "GOOD" else Color(0.9, 0.4, 0.4))
-	c.draw_string(ui.font, Vector2(px + 40, py - 3), cast_grade, HORIZONTAL_ALIGNMENT_RIGHT, 84.0, 13, Color(gcol, a))
-	c.draw_string(ui.font, Vector2(px - 120, py + 17), cast_short, HORIZONTAL_ALIGNMENT_LEFT, 244.0, 13, Color(0.92, 0.92, 1.0, a))
+	ui.ds(c, Vector2(px + 40, py - 3), cast_grade, HORIZONTAL_ALIGNMENT_RIGHT, 84.0, 13, Color(gcol, a))
+	ui.ds(c, Vector2(px - 120, py + 17), cast_short, HORIZONTAL_ALIGNMENT_LEFT, 244.0, 13, Color(0.92, 0.92, 1.0, a))
 
 func _vignette(c: Node2D, col: Color, a: float) -> void:
 	if a <= 0.01:
@@ -1484,7 +1492,7 @@ func draw_hud(c: Control) -> void:
 	ui.text(c, "HP %d/%d" % [run.hp, run.max_hp], Vector2(68, 33), 14, Color.WHITE)
 	if shield > 0:
 		ui.bar(c, Rect2(62, 40, 236, 8), minf(1.0, shield / 40.0), Color(0.45, 0.65, 1.0), Color(0.1, 0.1, 0.2))
-		ui.text(c, "シールド %d" % shield, Vector2(66, 62), 12, Color(0.6, 0.75, 1.0))
+		ui.text(c, Loc.t("シールド %d") % shield, Vector2(66, 62), 12, Color(0.6, 0.75, 1.0))
 	for i in max_energy:
 		var on := i < energy
 		var cx := 72.0 + i * 26.0
@@ -1494,41 +1502,41 @@ func draw_hud(c: Control) -> void:
 		"boss": label = "BOSS戦"
 		"elite": label = "エリート"
 		"tutorial": label = "チュートリアル"
-		"endless": label = "エンドレス ウェーブ%d" % (run.wave + 1)
+		"endless": label = Loc.t("エンドレス ウェーブ%d") % (run.wave + 1)
 		_: label = "バトル"
-	var tl := "" if (kind == "boss" or tutorial or not spawning) else "  残り%.0f" % maxf(time_left, 0.0)
-	ui.text(c, "%s%s   撃破 %d   %dG" % [label, tl, kills, run.gold], Vector2(16, 112), 14, Color(0.9, 0.9, 1.0))
+	var tl := "" if (kind == "boss" or tutorial or not spawning) else Loc.t("  残り%.0f") % maxf(time_left, 0.0)
+	ui.text(c, Loc.t("%s%s   撃破 %d   %dG") % [label, tl, kills, run.gold], Vector2(16, 112), 14, Color(0.9, 0.9, 1.0))
 	# relics
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(10 + i * 30, 128, 26, 26), "relic:%d" % i)
 	# combo / buffs
 	var rx := W - 310.0
 	if combo > 1:
-		ui.text(c, "コンボ x%d" % combo, Vector2(rx, 40), 28, Color(1.0, 0.9, 0.3) if combo < 10 else Color(1.0, 0.6, 0.2), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
+		ui.text(c, Loc.t("コンボ x%d") % combo, Vector2(rx, 40), 28, Color(1.0, 0.9, 0.3) if combo < 10 else Color(1.0, 0.6, 0.2), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
 		var per := 3.0 if run.has_relic("amp") else 2.0
-		ui.text(c, "ダメージ +%d%%" % int(minf(combo, 20.0) * per), Vector2(rx, 62), 14, Color(1.0, 0.9, 0.6), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
+		ui.text(c, Loc.t("ダメージ +%d%%") % int(minf(combo, 20.0) * per), Vector2(rx, 62), 14, Color(1.0, 0.9, 0.6), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
 	var by := 86.0
 	var buffs: Array = []
 	if frenzy_beats > 0:
-		buffs.append(["フレンジー %d" % frenzy_beats, Color(1.0, 0.6, 0.2)])
+		buffs.append([Loc.t("フレンジー %d") % frenzy_beats, Color(1.0, 0.6, 0.2)])
 	if slow_beats > 0:
-		buffs.append(["減速 %d" % slow_beats, Color(0.6, 0.9, 1.0)])
+		buffs.append([Loc.t("減速 %d") % slow_beats, Color(0.6, 0.9, 1.0)])
 	if blade_beats > 0:
-		buffs.append(["ブレード %d" % blade_beats, Color(0.5, 0.9, 1.0)])
+		buffs.append([Loc.t("ブレード %d") % blade_beats, Color(0.5, 0.9, 1.0)])
 	if res_bonus > 0:
-		buffs.append(["レゾナンス +%d" % res_bonus, Color(1.0, 0.4, 0.5)])
+		buffs.append([Loc.t("レゾナンス +%d") % res_bonus, Color(1.0, 0.4, 0.5)])
 	if fort > 0:
-		buffs.append(["フォートレス +%d" % fort, Color(0.5, 0.7, 1.0)])
+		buffs.append([Loc.t("フォートレス +%d") % fort, Color(0.5, 0.7, 1.0)])
 	if aura_k > 0:
-		buffs.append(["オーラ %d/%d" % [aura_count, aura_k], Color(0.8, 0.3, 0.6)])
+		buffs.append([Loc.t("オーラ %d/%d") % [aura_count, aura_k], Color(0.8, 0.3, 0.6)])
 	if echo_pending:
 		buffs.append(["エコー待機", Color(0.85, 0.7, 1.0)])
 	if fever_beats > 0:
 		buffs.append(["FEVER %d" % fever_beats, Color.from_hsv(fmod(elapsed * 1.5, 1.0), 0.5, 1.0)])
 	if overdrive > 0:
-		buffs.append(["オーバードライブ x%d" % overdrive, Color(1.0, 0.5, 0.4)])
+		buffs.append([Loc.t("オーバードライブ x%d") % overdrive, Color(1.0, 0.5, 0.4)])
 	if thorns > 0:
-		buffs.append(["トゲ %d" % thorns, Color(0.5, 0.9, 0.4)])
+		buffs.append([Loc.t("トゲ %d") % thorns, Color(0.5, 0.9, 0.4)])
 	if heart_k > 0:
 		buffs.append(["ハートビート", Color(1.0, 0.45, 0.55)])
 	for b in buffs:
@@ -1625,5 +1633,5 @@ func draw_hud(c: Control) -> void:
 		ui.mini_card(c, nxt, Rect2(20, H - 148, 204, 56))
 	else:
 		ui.text(c, "(なし)", Vector2(20, H - 120), 14, Color(0.7, 0.7, 0.8))
-	ui.text(c, "山札 %d" % deck.draw_pile.size(), Vector2(20, H - 66), 16, Color(0.8, 0.8, 0.95))
-	ui.text(c, "捨て札 %d" % deck.discard_pile.size(), Vector2(20, H - 42), 16, Color(0.8, 0.8, 0.95))
+	ui.text(c, Loc.t("山札 %d") % deck.draw_pile.size(), Vector2(20, H - 66), 16, Color(0.8, 0.8, 0.95))
+	ui.text(c, Loc.t("捨て札 %d") % deck.discard_pile.size(), Vector2(20, H - 42), 16, Color(0.8, 0.8, 0.95))

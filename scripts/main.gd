@@ -37,6 +37,9 @@ var toasts: Array = []
 var bg_parts: Array = []
 var drag_id := ""
 var touch_mode := false
+var pad_mode := false
+var focus_id := ""
+var _axis_state := {}
 var joy_id := -1
 var joy_origin := Vector2.ZERO
 var joy_pos := Vector2.ZERO
@@ -96,6 +99,8 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	_autotest = "--autotest" in args
 	for a in args:
+		if a.begins_with("--lang="):
+			Settings.lang = a.substr(7)
 		if a.begins_with("--shot="):
 			_shot_path = a.substr(7)
 		elif a.begins_with("--screen="):
@@ -103,6 +108,8 @@ func _ready() -> void:
 	if _autotest or _screen_arg != "":
 		Conductor.start()
 		state = S.MENU
+		if "--padtest" in args:
+			_padtest.call_deferred()
 	if _autotest:
 		Engine.time_scale = 5.0 if _shot_path == "" else 1.0
 		if "--tutorial" in args:
@@ -344,7 +351,7 @@ func _event_choice(e: String) -> void:
 				var r := Relics.random_ids(1, run.relics)
 				if not r.is_empty():
 					run.add_relic(r[0])
-					event_result = "祭壇が応えた。レリック「%s」を得た。" % Relics.DB[r[0]]["name"]
+					event_result = Loc.t("祭壇が応えた。レリック「%s」を得た。") % Relics.DB[r[0]]["name"]
 			else:
 				event_result = "祭壇は何も応えなかった。"
 		"amp":
@@ -358,7 +365,7 @@ func _event_choice(e: String) -> void:
 				var i: int = ups.pick_random()
 				run.deck[i] = Cards.upgrade(run.deck[i])
 				run.hp = maxi(1, run.hp - 10)
-				event_result = "「%s」が強化された。HPが10減った。" % Cards.def(run.deck[i])["name"]
+				event_result = Loc.t("「%s」が強化された。HPが10減った。") % Cards.def(run.deck[i])["name"]
 		"chest":
 			if randf() < 0.5:
 				run.gain_gold(70)
@@ -371,7 +378,7 @@ func _event_choice(e: String) -> void:
 				run.gold -= 30
 				var id: String = Cards.random_choices(1)[0]
 				run.deck.append(id)
-				event_result = "「%s」を手に入れた。" % Cards.def(id)["name"]
+				event_result = Loc.t("「%s」を手に入れた。") % Cards.def(id)["name"]
 			else:
 				event_result = "ゴールドが足りない。"
 		"dealer_remove":
@@ -410,6 +417,122 @@ func _release() -> void:
 	if drag_id != "":
 		drag_id = ""
 		Settings.save_cfg()
+
+# ---- gamepad -----------------------------------------------------------
+
+func _pad_input(event: InputEvent) -> void:
+	if event is InputEventJoypadButton:
+		var jb := event as InputEventJoypadButton
+		if not jb.pressed:
+			return
+		pad_mode = true
+		match jb.button_index:
+			JOY_BUTTON_DPAD_UP: _pad_nav(Vector2.UP)
+			JOY_BUTTON_DPAD_DOWN: _pad_nav(Vector2.DOWN)
+			JOY_BUTTON_DPAD_LEFT: _pad_nav(Vector2.LEFT)
+			JOY_BUTTON_DPAD_RIGHT: _pad_nav(Vector2.RIGHT)
+			JOY_BUTTON_START:
+				if state == S.BATTLE:
+					_toggle_pause()
+			_:
+				_pad_button(jb.button_index)
+	elif event is InputEventJoypadMotion:
+		var jm := event as InputEventJoypadMotion
+		if jm.axis != JOY_AXIS_LEFT_X and jm.axis != JOY_AXIS_LEFT_Y:
+			return
+		var key := int(jm.axis) * 2 + (1 if jm.axis_value > 0.0 else 0)
+		var strong := absf(jm.axis_value) > 0.6
+		if strong and not _axis_state.get(key, false):
+			_axis_state[key] = true
+			pad_mode = true
+			if jm.axis == JOY_AXIS_LEFT_X:
+				_pad_nav(Vector2.RIGHT if jm.axis_value > 0.0 else Vector2.LEFT)
+			else:
+				_pad_nav(Vector2.DOWN if jm.axis_value > 0.0 else Vector2.UP)
+		elif not strong:
+			_axis_state[key] = false
+
+func _in_battle_play() -> bool:
+	return state == S.BATTLE and battle != null and not paused
+
+func _pad_button(idx: int) -> void:
+	if _in_battle_play():
+		match idx:
+			JOY_BUTTON_A: battle.try_play(0)
+			JOY_BUTTON_B: battle.try_play(1)
+			JOY_BUTTON_X: battle.try_play(2)
+			JOY_BUTTON_Y: battle.try_play(3)
+			JOY_BUTTON_RIGHT_SHOULDER: battle.try_play(4)
+			JOY_BUTTON_LEFT_SHOULDER: battle.use_potion(0)
+		return
+	if state == S.SPLASH:
+		return
+	if idx == JOY_BUTTON_A:
+		if focus_id == "":
+			_pad_nav(Vector2.DOWN)
+		elif not focus_id.begins_with("sl:"):
+			_click(focus_id)
+	elif idx == JOY_BUTTON_B:
+		for bid in ["deck_close", "resume", "back", "leave", "skip", "menu"]:
+			for bt in ui.buttons:
+				if bt["id"] == bid:
+					_click(bid)
+					return
+
+func _pad_nav(dir: Vector2) -> void:
+	if _in_battle_play():
+		return
+	var cands: Array = []
+	for bt in ui.buttons:
+		var bid: String = bt["id"]
+		if bid.begins_with("relic:") or bid.begins_with("pot:") or bid == "tr":
+			continue
+		cands.append(bt)
+	if cands.is_empty():
+		return
+	var cur_rect := Rect2()
+	var found := false
+	for bt in cands:
+		if bt["id"] == focus_id:
+			cur_rect = bt["rect"]
+			found = true
+	if not found:
+		cands.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			var ra: Rect2 = a["rect"]
+			var rb: Rect2 = b["rect"]
+			return ra.position.y < rb.position.y or (is_equal_approx(ra.position.y, rb.position.y) and ra.position.x < rb.position.x))
+		focus_id = cands[0]["id"]
+		Conductor.play_sfx("tick")
+		return
+	if focus_id.begins_with("sl:") and (dir == Vector2.LEFT or dir == Vector2.RIGHT):
+		var d := 0.05 * dir.x
+		if focus_id == "sl:music":
+			Settings.music_vol = clampf(Settings.music_vol + d, 0.0, 1.0)
+		else:
+			Settings.sfx_vol = clampf(Settings.sfx_vol + d, 0.0, 1.0)
+		Settings.apply()
+		Settings.save_cfg()
+		Conductor.play_sfx("tick")
+		return
+	var best := ""
+	var best_score := 1e12
+	var cc := cur_rect.get_center()
+	for bt in cands:
+		if bt["id"] == focus_id:
+			continue
+		var v: Vector2 = (bt["rect"] as Rect2).get_center() - cc
+		if v.length() < 1.0:
+			continue
+		var dt := v.normalized().dot(dir)
+		if dt < 0.35:
+			continue
+		var score := v.length() * (1.0 + 2.5 * (1.0 - dt))
+		if score < best_score:
+			best_score = score
+			best = bt["id"]
+	if best != "":
+		focus_id = best
+		Conductor.play_sfx("tick")
 
 func _touch_input(event: InputEvent) -> void:
 	# Touch is handled directly (mouse emulation is off) so a held joystick finger
@@ -456,7 +579,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if state == S.SPLASH:
 		# Touch: start on RELEASE - mobile browsers only grant audio on touchend/click, not touchstart.
-		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) 				or (event is InputEventScreenTouch and not event.pressed):
+		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) or (event is InputEventJoypadButton and event.pressed) 				or (event is InputEventScreenTouch and not event.pressed):
 			if event is InputEventScreenTouch:
 				touch_mode = true
 			_begin()
@@ -464,6 +587,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch or event is InputEventScreenDrag:
 		_touch_input(event)
 		return
+	if event is InputEventJoypadButton or event is InputEventJoypadMotion:
+		_pad_input(event)
+		return
+	if event is InputEventMouseMotion and pad_mode:
+		pad_mode = false
+		focus_id = ""
 	if event is InputEventKey and event.pressed and not event.echo:
 		_key((event as InputEventKey).keycode)
 	elif event is InputEventMouseButton and event.pressed:
@@ -629,6 +758,16 @@ func _click(id: String) -> void:
 		"shake":
 			Settings.shake = not Settings.shake
 			Settings.save_cfg()
+		"flash":
+			Settings.reduce_flash = not Settings.reduce_flash
+			Settings.save_cfg()
+		"assist":
+			Settings.assist = (Settings.assist + 1) % 3
+			Settings.save_cfg()
+		"lang":
+			Settings.lang = "en" if Settings.lang == "ja" else "ja"
+			Loc.clear_cache()
+			Settings.save_cfg()
 		"fullscreen":
 			Settings.fullscreen = not Settings.fullscreen
 			Settings.apply()
@@ -778,6 +917,7 @@ func _process(delta: float) -> void:
 	glow.queue_redraw()
 
 func _on_enter(s: S) -> void:
+	focus_id = ""
 	if s == S.BATTLE and battle == null:
 		state = S.MENU
 	if s == S.MENU:
@@ -794,6 +934,8 @@ func _draw() -> void:
 func draw_hud(c: Control) -> void:
 	ui.begin(c, get_process_delta_time())
 	ui.touch = touch_mode
+	ui.pad = pad_mode
+	ui.focus_id = focus_id if pad_mode else ""
 	match state:
 		S.SPLASH: _draw_splash(c)
 		S.MENU: _draw_menu(c)
@@ -891,7 +1033,7 @@ func _draw_menu(c: Control) -> void:
 			menu_idx = i
 	_dancers(c, 595.0)
 	var st: Dictionary = Settings.stats
-	ui.center(c, "プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d" % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 678.0, 14, Color(0.7, 0.7, 0.85))
+	ui.center(c, Loc.t("プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d") % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 678.0, 14, Color(0.7, 0.7, 0.85))
 	ui.text(c, "CC0素材: Kenney / Joth", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
 	ui.text(c, "♪ %s - Joth (CC0)" % Conductor.TRACKS[Conductor.track_idx]["name"], Vector2(0, H - 12), 11, Color(0.6, 0.6, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 16.0)
 
@@ -903,11 +1045,11 @@ func _draw_mode(c: Control) -> void:
 	var dmod: int = day % 3
 	var modes := [
 		["mode:run", "ステージ攻略", "10階層のマップを進み、最上階のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\n難易度(アセンション)で何度も挑める。", Color(0.9, 0.5, 0.4), 84,
-			"クリア %d回 / 最高 %d階" % [Settings.stats["wins"], Settings.stats["best_floor"]]],
+			Loc.t("クリア %d回 / 最高 %d階") % [Settings.stats["wins"], Settings.stats["best_floor"]]],
 		["mode:endless", "エンドレス", "ウェーブが延々と続くサバイバル。\n勝ち抜くごとにカード報酬。\n10ウェーブごとにボスが出現！", Color(0.5, 0.8, 1.0), 108,
-			"最高 %dウェーブ" % Settings.stats["endless_best"]],
+			Loc.t("最高 %dウェーブ") % Settings.stats["endless_best"]],
 		["mode:daily", "デイリーラン", "今日だけの固定マップ・キャラ・特殊ルール。\n本日のルール:\n" + RunState.MOD_NAMES[dmod], Color(1.0, 0.85, 0.3), 86,
-			("今日の記録: %d階" % (int(Settings.stats["daily_best"]) + 1)) if (Settings.stats["daily_day"] == day and Settings.stats["daily_best"] >= 0) else "今日は未挑戦"],
+			(Loc.t("今日の記録: %d階") % (int(Settings.stats["daily_best"]) + 1)) if (Settings.stats["daily_day"] == day and Settings.stats["daily_best"] >= 0) else "今日は未挑戦"],
 	]
 	for i in 3:
 		var m: Array = modes[i]
@@ -915,7 +1057,7 @@ func _draw_mode(c: Control) -> void:
 		ui.button(c, m[0], r, "", true, m[3])
 		c.draw_texture_rect(tex(m[4]), Rect2(r.position.x + r.size.x / 2.0 - 48.0, r.position.y + 26.0 - absf(sin(t * 3.0 + i)) * 8.0, 96, 96), false)
 		ui.text(c, m[1], Vector2(r.position.x, r.position.y + 165.0), 32, m[3], HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 20.0, r.position.y + 212.0), m[2], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 40.0, 16, -1, Color(0.9, 0.9, 0.95))
+		ui.dms(c, Vector2(r.position.x + 20.0, r.position.y + 212.0), m[2], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 40.0, 16, -1, Color(0.9, 0.9, 0.95))
 		ui.text(c, m[5], Vector2(r.position.x, r.position.y + 375.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	if not Settings.tutorial_done:
 		ui.center(c, "初めての方は、メニューの『あそびかた』でリズムの基本を練習できます", 610.0, 16, Color(0.6, 1.0, 0.7))
@@ -945,25 +1087,25 @@ func _draw_char(c: Control) -> void:
 		if not ok:
 			ui.text(c, "？？？", Vector2(r.position.x, r.position.y + 160.0), 30, col, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 			ui.text(c, "ロック中", Vector2(r.position.x, r.position.y + 200.0), 18, Color(1, 0.8, 0.5), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-			c.draw_multiline_string(font_res, Vector2(r.position.x + 16.0, r.position.y + 240.0), cd["unlock"], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 32.0, 15, -1, Color(0.8, 0.8, 0.85))
+			ui.dms(c, Vector2(r.position.x + 16.0, r.position.y + 240.0), cd["unlock"], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 32.0, 15, -1, Color(0.8, 0.8, 0.85))
 			continue
 		ui.text(c, cd["name"], Vector2(r.position.x, r.position.y + 158.0), 28, col, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		ui.text(c, "HP %d   速度 %d%%   クリア%d回" % [cd["hp"], int(float(cd["speed"]) * 100.0), int(Settings.char_wins.get(cid, 0))], Vector2(r.position.x, r.position.y + 184.0), 13, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		ui.text(c, Loc.t("HP %d   速度 %d%%   クリア%d回") % [cd["hp"], int(float(cd["speed"]) * 100.0), int(Settings.char_wins.get(cid, 0))], Vector2(r.position.x, r.position.y + 184.0), 13, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 		ui.text(c, "◆ " + cd["passive"], Vector2(r.position.x + 14.0, r.position.y + 218.0), 16, Color(1, 0.9, 0.5))
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 14.0, r.position.y + 240.0), cd["passive_desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 13, -1, Color(0.9, 0.9, 0.95))
+		ui.dms(c, Vector2(r.position.x + 14.0, r.position.y + 240.0), cd["passive_desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 13, -1, Color(0.9, 0.9, 0.95))
 		var counts := {}
 		for id in cd["starter"]:
 			counts[id] = counts.get(id, 0) + 1
 		var line := ""
 		for id in counts:
-			line += "%s×%d  " % [Cards.def(id)["name"], counts[id]]
+			line += "%s ×%d    " % [Cards.def(id)["name"], counts[id]]
 		ui.text(c, "初期デッキ", Vector2(r.position.x + 14.0, r.position.y + 305.0), 13, Color(0.7, 0.8, 1.0))
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 14.0, r.position.y + 325.0), line, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 12, -1, Color(0.85, 0.85, 0.9))
+		ui.dms(c, Vector2(r.position.x + 14.0, r.position.y + 325.0), line, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 12, -1, Color(0.85, 0.85, 0.9))
 	if sel_mode == "run":
 		var au: int = Settings.stats["asc_unlocked"]
 		ui.button(c, "asc-", Rect2(W / 2.0 - 330.0, 530.0, 50.0, 40.0), "◀", sel_asc > 0, Color(0.6, 0.6, 0.9), 20)
 		ui.button(c, "asc+", Rect2(W / 2.0 + 280.0, 530.0, 50.0, 40.0), "▶", sel_asc < mini(5, au), Color(0.6, 0.6, 0.9), 20)
-		ui.text(c, "アセンション %d" % sel_asc, Vector2(0, 556.0), 22, Color(1, 0.7, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, Loc.t("アセンション %d") % sel_asc, Vector2(0, 556.0), 22, Color(1, 0.7, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
 		ui.text(c, RunState.ASC_TEXT[sel_asc] + ("" if au >= 5 else "  (クリアで次の段階が解放)"), Vector2(0, 582.0), 14, Color(0.85, 0.85, 0.95), HORIZONTAL_ALIGNMENT_CENTER, W)
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
 	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", Characters.ORDER[sel_char] in unl, Color(1.0, 0.8, 0.35), 30)
@@ -973,10 +1115,10 @@ func _draw_records(c: Control) -> void:
 	ui.center(c, "記録・実績", 76.0, 40, Color(1, 0.9, 0.6))
 	var st: Dictionary = Settings.stats
 	var lines := [
-		"プレイ回数: %d" % st["runs"], "クリア回数: %d" % st["wins"], "最高到達階: %d" % st["best_floor"],
-		"エンドレス最高: %dウェーブ" % st["endless_best"], "1ランの最多撃破: %d" % st["best_kills"], "累計撃破: %d" % st["total_kills"],
-		"最高コンボ: %d" % st["best_combo"], "PERFECT累計: %d" % st["perfects"], "フィーバー発動: %d回" % st["fevers"],
-		"解放済みアセンション: %d" % st["asc_unlocked"],
+		Loc.t("プレイ回数: %d") % st["runs"], Loc.t("クリア回数: %d") % st["wins"], Loc.t("最高到達階: %d") % st["best_floor"],
+		Loc.t("エンドレス最高: %dウェーブ") % st["endless_best"], Loc.t("1ランの最多撃破: %d") % st["best_kills"], Loc.t("累計撃破: %d") % st["total_kills"],
+		Loc.t("最高コンボ: %d") % st["best_combo"], Loc.t("PERFECT累計: %d") % st["perfects"], Loc.t("フィーバー発動: %d回") % st["fevers"],
+		Loc.t("解放済みアセンション: %d") % st["asc_unlocked"],
 	]
 	ui.panel(c, Rect2(60, 120, 340, 420))
 	for i in lines.size():
@@ -985,7 +1127,7 @@ func _draw_records(c: Control) -> void:
 	for id in Achievements.ORDER:
 		if Settings.ach.has(id):
 			cnt += 1
-	ui.text(c, "実績 %d / %d" % [cnt, Achievements.ORDER.size()], Vector2(430, 140), 20, Color(1, 0.9, 0.5))
+	ui.text(c, Loc.t("実績 %d / %d") % [cnt, Achievements.ORDER.size()], Vector2(430, 140), 20, Color(1, 0.9, 0.5))
 	for i in Achievements.ORDER.size():
 		var id: String = Achievements.ORDER[i]
 		var got := Settings.ach.has(id)
@@ -1007,36 +1149,42 @@ func _draw_toasts(c: Control) -> void:
 		ui.text(c, "実績解除！", r.position + Vector2(14, 22), 13, Color(1, 0.85, 0.4))
 		ui.text(c, "★ " + Achievements.DB[tt["id"]]["name"], r.position + Vector2(14, 44), 20, Color.WHITE)
 
+func _toggle_btn(c: Control, id: String, r: Rect2, label: String, on: bool, value := "") -> void:
+	var txt := value if value != "" else ("ON" if on else "OFF")
+	ui.button(c, id, r, "%s:  %s" % [Loc.t(label), Loc.t(txt)], true, Color(0.5, 0.9, 0.6) if on else Color(0.6, 0.6, 0.75), 18)
+
 func _draw_settings(c: Control) -> void:
 	_bg(c)
-	ui.center(c, "設定", 90.0, 44, Color(1, 0.9, 0.6))
+	ui.center(c, "設定", 74.0, 40, Color(1, 0.9, 0.6))
 	var x := 290.0
-	ui.text(c, "音楽音量", Vector2(x, 190), 22, Color.WHITE)
-	ui.slider(c, "sl:music", Rect2(SL_X, 176.0, SL_W, 16.0), Settings.music_vol)
-	ui.text(c, "%d%%" % int(Settings.music_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 192), 20, Color.WHITE)
-	ui.text(c, "効果音量", Vector2(x, 250), 22, Color.WHITE)
-	ui.slider(c, "sl:sfx", Rect2(SL_X, 236.0, SL_W, 16.0), Settings.sfx_vol)
-	ui.text(c, "%d%%" % int(Settings.sfx_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 252), 20, Color.WHITE)
-	ui.text(c, "判定オフセット", Vector2(x, 320), 22, Color.WHITE)
-	ui.button(c, "off-", Rect2(SL_X, 296.0, 56.0, 38.0), "－", true, Color(0.6, 0.6, 0.9), 22)
-	ui.text(c, "%+d ms" % Settings.offset_ms, Vector2(SL_X + 60.0, 324), 22, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 130.0)
-	ui.button(c, "off+", Rect2(SL_X + 200.0, 296.0, 56.0, 38.0), "＋", true, Color(0.6, 0.6, 0.9), 22)
-	ui.button(c, "calib", Rect2(SL_X + 270.0, 296.0, 220.0, 38.0), "自動キャリブレーション", true, Color(0.9, 0.7, 0.3), 16)
-	ui.text(c, "押すのが遅れる/早いと感じたら調整。ずれが大きい時はキャリブレーションが便利です。", Vector2(x, 360), 14, Color(0.7, 0.7, 0.85))
-	ui.text(c, "画面揺れ", Vector2(x, 420), 22, Color.WHITE)
-	ui.button(c, "shake", Rect2(SL_X, 396.0, 160.0, 38.0), "ON" if Settings.shake else "OFF", true, Color(0.5, 0.9, 0.6) if Settings.shake else Color(0.6, 0.6, 0.7), 20)
-	ui.text(c, "フルスクリーン", Vector2(x, 480), 22, Color.WHITE)
-	ui.button(c, "fullscreen", Rect2(SL_X, 456.0, 160.0, 38.0), "ON" if Settings.fullscreen else "OFF", true, Color(0.5, 0.9, 0.6) if Settings.fullscreen else Color(0.6, 0.6, 0.7), 20)
-	ui.text(c, "BGM", Vector2(x, 540), 22, Color.WHITE)
-	ui.button(c, "bgm-", Rect2(SL_X, 516.0, 56.0, 38.0), "◀", true, Color(0.6, 0.6, 0.9), 20)
+	ui.text(c, "音楽音量", Vector2(x, 150), 20, Color.WHITE)
+	ui.slider(c, "sl:music", Rect2(SL_X, 136.0, SL_W, 16.0), Settings.music_vol)
+	ui.text(c, "%d%%" % int(Settings.music_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 152), 18, Color.WHITE)
+	ui.text(c, "効果音量", Vector2(x, 200), 20, Color.WHITE)
+	ui.slider(c, "sl:sfx", Rect2(SL_X, 186.0, SL_W, 16.0), Settings.sfx_vol)
+	ui.text(c, "%d%%" % int(Settings.sfx_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 202), 18, Color.WHITE)
+	ui.text(c, "判定オフセット", Vector2(x, 262), 20, Color.WHITE)
+	ui.button(c, "off-", Rect2(SL_X, 238.0, 56.0, 36.0), "－", true, Color(0.6, 0.6, 0.9), 22)
+	ui.text(c, "%+d ms" % Settings.offset_ms, Vector2(SL_X + 60.0, 264), 20, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 130.0)
+	ui.button(c, "off+", Rect2(SL_X + 200.0, 238.0, 56.0, 36.0), "＋", true, Color(0.6, 0.6, 0.9), 22)
+	ui.button(c, "calib", Rect2(SL_X + 270.0, 238.0, 220.0, 36.0), "自動キャリブレーション", true, Color(0.9, 0.7, 0.3), 15)
+	ui.text(c, "BGM", Vector2(x, 322), 20, Color.WHITE)
+	ui.button(c, "bgm-", Rect2(SL_X, 298.0, 56.0, 36.0), "◀", true, Color(0.6, 0.6, 0.9), 20)
 	var bname := "ランダム (戦闘ごと)" if Settings.bgm < 0 else "%s  (%d BPM)" % [Conductor.TRACKS[Settings.bgm]["name"], int(Conductor.TRACKS[Settings.bgm]["bpm"])]
-	ui.text(c, bname, Vector2(SL_X + 60.0, 542), 18, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
-	ui.button(c, "bgm+", Rect2(SL_X + 364.0, 516.0, 56.0, 38.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
+	ui.text(c, bname, Vector2(SL_X + 60.0, 324), 17, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
+	ui.button(c, "bgm+", Rect2(SL_X + 364.0, 298.0, 56.0, 36.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
+	ui.text(c, "押すのが遅れる/早いと感じたら調整。ずれが大きい時はキャリブレーションが便利です。", Vector2(0, 372), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+	_toggle_btn(c, "shake", Rect2(290, 400, 340, 44), "画面揺れ", Settings.shake)
+	_toggle_btn(c, "flash", Rect2(650, 400, 340, 44), "フラッシュ軽減", Settings.reduce_flash)
+	_toggle_btn(c, "fullscreen", Rect2(290, 458, 340, 44), "フルスクリーン", Settings.fullscreen)
+	var al := ["オフ", "広い", "とても広い"]
+	_toggle_btn(c, "assist", Rect2(650, 458, 340, 44), "判定アシスト", Settings.assist > 0, al[Settings.assist])
+	ui.button(c, "lang", Rect2(290, 516, 700, 44), "言語 / Language:  " + ("日本語" if Settings.lang == "ja" else "English"), true, Color(1.0, 0.8, 0.35), 18)
 	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 610.0, 240.0, 52.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
-	var cx := 1060.0
-	c.draw_circle(Vector2(cx, 300), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
-	c.draw_arc(Vector2(cx, 300), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)
-	ui.text(c, "ビート", Vector2(cx - 50.0, 360), 16, Color(0.8, 0.8, 0.95), HORIZONTAL_ALIGNMENT_CENTER, 100.0)
+	var cx := 1100.0
+	c.draw_circle(Vector2(cx, 220), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
+	c.draw_arc(Vector2(cx, 220), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)
+	ui.text(c, "ビート", Vector2(cx - 50.0, 280), 16, Color(0.8, 0.8, 0.95), HORIZONTAL_ALIGNMENT_CENTER, 100.0)
 
 func _draw_calib(c: Control) -> void:
 	_bg(c)
@@ -1049,7 +1197,7 @@ func _draw_calib(c: Control) -> void:
 	for i in 10:
 		c.draw_circle(Vector2(cx - 135.0 + i * 30.0, 460.0), 9.0, Color(0.4, 1.0, 0.6) if i < calib_taps.size() else Color(0.3, 0.3, 0.4))
 	if calib_done:
-		ui.center(c, "結果: %+d ms を設定しました" % Settings.offset_ms, 520.0, 28, Color(1, 0.9, 0.4))
+		ui.center(c, Loc.t("結果: %+d ms を設定しました") % Settings.offset_ms, 520.0, 28, Color(1, 0.9, 0.4))
 		ui.button(c, "calib_retry", Rect2(cx - 270.0, 570.0, 240.0, 50.0), "やり直す", true, Color(0.9, 0.7, 0.3), 22)
 		ui.button(c, "back", Rect2(cx + 30.0, 570.0, 240.0, 50.0), "完了", true, Color(0.5, 0.9, 0.6), 22)
 	else:
@@ -1065,7 +1213,7 @@ func _run_bar(c: Control, show_deck := true) -> void:
 	ui.bar(c, Rect2(58, 10, 200, 16), float(run.hp) / run.max_hp, Color(0.85, 0.25, 0.3))
 	ui.text(c, "HP %d/%d" % [run.hp, run.max_hp], Vector2(64, 24), 13, Color.WHITE)
 	ui.text(c, "%d G" % run.gold, Vector2(58, 46), 17, Color(1, 0.85, 0.3))
-	var fl := "ウェーブ %d" % (run.wave + 1) if run.mode == "endless" else "%d / %d階" % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1]
+	var fl := Loc.t("ウェーブ %d") % (run.wave + 1) if run.mode == "endless" else Loc.t("%d / %d階") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1]
 	ui.text(c, fl, Vector2(150, 46), 15, Color(0.85, 0.85, 1.0))
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(300 + i * 34, 12, 30, 30), "relic:%d" % i)
@@ -1082,7 +1230,7 @@ func _run_bar(c: Control, show_deck := true) -> void:
 			c.draw_rect(pr, Color(0.1, 0.1, 0.16, 0.6))
 			c.draw_rect(pr, Color(1, 1, 1, 0.15), false, 1.0)
 	if show_deck:
-		ui.button(c, "deck", Rect2(W - 190, 8, 170, 38), "デッキ (%d)" % run.deck.size(), true, Color(0.5, 0.7, 1.0), 18)
+		ui.button(c, "deck", Rect2(W - 190, 8, 170, 38), Loc.t("デッキ (%d)") % run.deck.size(), true, Color(0.5, 0.7, 1.0), 18)
 
 func _relic_tips(c: Control) -> void:
 	for i in run.potions.size():
@@ -1145,19 +1293,19 @@ func _draw_reward(c: Control) -> void:
 	_bg(c)
 	_run_bar(c)
 	ui.center(c, "勝利！", 110.0, 52, Color(1, 0.9, 0.4))
-	ui.center(c, "+%d G 獲得  /  カードを1枚選ぼう" % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
+	ui.center(c, Loc.t("+%d G 獲得  /  カードを1枚選ぼう") % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
 	for i in reward_cards.size():
 		ui.card(c, reward_cards[i], Rect2(W / 2.0 - 255.0 + i * 180.0, 200.0, 160.0, 250.0), str(i + 1), true, false, "rw:%d" % i)
 	if reward_relic != "":
 		var d: Dictionary = Relics.DB[reward_relic]
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 485.0, 520.0, 56.0), Color(0.1, 0.08, 0.04, 0.95), Color(1, 0.85, 0.4))
-		ui.text(c, "レリック: %s - %s" % [d["name"], d["desc"]], Vector2(W / 2.0 - 250.0, 520.0), 16, Color(1, 0.95, 0.7))
+		ui.text(c, Loc.t("レリック: %s - %s") % [d["name"], d["desc"]], Vector2(W / 2.0 - 250.0, 520.0), 16, Color(1, 0.95, 0.7))
 		ui.button(c, "relic_take", Rect2(W / 2.0 + 280.0, 485.0, 110.0, 56.0), "受け取る", true, Color(1.0, 0.8, 0.3), 18)
 	if reward_potion != "":
 		var pd: Dictionary = Potions.DB[reward_potion]
 		var full := run.potions.size() >= run.potion_slots()
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 550.0, 520.0, 50.0), Color(0.05, 0.08, 0.1, 0.95), pd["color"])
-		ui.text(c, "ポーション: %s - %s" % [pd["name"], pd["desc"]], Vector2(W / 2.0 - 250.0, 581.0), 15, Color(0.95, 1, 0.95))
+		ui.text(c, Loc.t("ポーション: %s - %s") % [pd["name"], pd["desc"]], Vector2(W / 2.0 - 250.0, 581.0), 15, Color(0.95, 1, 0.95))
 		ui.button(c, "potion_take", Rect2(W / 2.0 + 280.0, 550.0, 110.0, 50.0), "満杯" if full else "受け取る", not full, pd["color"], 18)
 	ui.button(c, "skip", Rect2(W / 2.0 - 110.0, 630.0, 220.0, 48.0), "進む [S]", true, Color(0.6, 0.6, 0.8), 20)
 	_relic_tips(c)
@@ -1172,7 +1320,7 @@ func _draw_rest(c: Control) -> void:
 		var fy := 330.0 - fmod(t * 60.0 + i * 25.0, 90.0)
 		c.draw_circle(Vector2(fx + sin(t * 3.0 + i) * 14.0, fy + 60.0), 14.0 - fmod(t * 60.0 + i * 25.0, 90.0) * 0.12, Color(1.0, 0.5 + i * 0.08, 0.2, 0.7))
 	var heal := int(run.max_hp * (0.45 if run.has_relic("fuel") else 0.3))
-	ui.button(c, "rest:heal", Rect2(W / 2.0 - 340.0, 420.0, 320.0, 110.0), "休む  HP +%d" % heal, true, Color(0.4, 0.9, 0.5), 24)
+	ui.button(c, "rest:heal", Rect2(W / 2.0 - 340.0, 420.0, 320.0, 110.0), Loc.t("休む  HP +%d") % heal, true, Color(0.4, 0.9, 0.5), 24)
 	var can_up := false
 	for id in run.deck:
 		if not Cards.is_upgraded(id):
@@ -1185,7 +1333,7 @@ func _draw_pick(c: Control) -> void:
 	_run_bar(c, false)
 	var title := "強化するカードを選ぶ"
 	if pick_mode == "remove":
-		title = "削除するカードを選ぶ (%dG)" % (50 + 25 * shop_removed)
+		title = Loc.t("削除するカードを選ぶ (%dG)") % (50 + 25 * shop_removed)
 	elif pick_mode == "remove_free":
 		title = "削除するカードを選ぶ (無料)"
 	ui.center(c, title, 92.0, 30, Color(1, 0.9, 0.6))
@@ -1215,11 +1363,11 @@ func _deck_grid(c: Control, clickable: bool) -> void:
 	if total_rows > rows_vis:
 		ui.button(c, "scroll:-1", Rect2(W - 80.0, 140.0, 56.0, 56.0), "▲", pick_scroll > 0, Color(0.6, 0.7, 1.0), 24)
 		ui.button(c, "scroll:1", Rect2(W - 80.0, 206.0, 56.0, 56.0), "▼", pick_scroll < total_rows - rows_vis, Color(0.6, 0.7, 1.0), 24)
-		ui.text(c, "マウスホイール / ドラッグ / ▲▼でスクロール (%d/%d)" % [pick_scroll + 1, total_rows - rows_vis + 1], Vector2(0, H - 24.0), 14, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, Loc.t("マウスホイール / ドラッグ / ▲▼でスクロール (%d/%d)") % [pick_scroll + 1, total_rows - rows_vis + 1], Vector2(0, H - 24.0), 14, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
 
 func _draw_deck_overlay(c: Control) -> void:
 	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.85))
-	ui.center(c, "デッキ (%d枚)" % run.deck.size(), 92.0, 30, Color(1, 0.9, 0.6))
+	ui.center(c, Loc.t("デッキ (%d枚)") % run.deck.size(), 92.0, 30, Color(1, 0.9, 0.6))
 	ui.buttons.clear()
 	_deck_grid(c, false)
 	ui.button(c, "deck_close", Rect2(W / 2.0 - 100.0, H - 70.0, 200.0, 48), "閉じる", true, Color(0.6, 0.6, 0.8), 20)
@@ -1245,7 +1393,7 @@ func _draw_shop(c: Control) -> void:
 			continue
 		ui.button(c, "buy:r%d" % i, r, "", run.gold >= it["price"], d["color"])
 		ui.text(c, d["name"], r.position + Vector2(14, 28), 20, d["color"])
-		c.draw_multiline_string(font_res, r.position + Vector2(14, 50), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 14, -1, Color(0.9, 0.9, 0.95))
+		ui.dms(c, r.position + Vector2(14, 50), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 14, -1, Color(0.9, 0.9, 0.95))
 		ui.text(c, "%d G" % it["price"], r.position + Vector2(0, 92), 18, Color(1, 0.85, 0.3) if run.gold >= it["price"] else Color(0.7, 0.4, 0.4), HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 12.0)
 	for i in shop_potions.size():
 		var it: Dictionary = shop_potions[i]
@@ -1260,7 +1408,7 @@ func _draw_shop(c: Control) -> void:
 		ui.text(c, pd["desc"], r.position + Vector2(14, 46), 12, Color(0.9, 0.9, 0.95))
 		ui.text(c, "%d G" % it["price"], r.position + Vector2(0, 24), 16, Color(1, 0.85, 0.3) if ok else Color(0.7, 0.4, 0.4), HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 12.0)
 	var rc := 50 + 25 * shop_removed
-	ui.button(c, "remove", Rect2(95.0, 470.0, 340.0, 60.0), "カードを削除 (%d G)" % rc, run.gold >= rc and run.deck.size() > 5, Color(0.9, 0.5, 0.5), 20)
+	ui.button(c, "remove", Rect2(95.0, 470.0, 340.0, 60.0), Loc.t("カードを削除 (%d G)") % rc, run.gold >= rc and run.deck.size() > 5, Color(0.9, 0.5, 0.5), 20)
 	ui.button(c, "leave", Rect2(W / 2.0 - 110.0, 600.0, 220.0, 52.0), "店を出る", true, Color(0.6, 0.6, 0.8), 22)
 	_relic_tips(c)
 
@@ -1307,11 +1455,11 @@ func _draw_end(c: Control) -> void:
 	c.draw_texture_rect(tex(int(cd["tile"])), Rect2(W / 2.0 - 40.0, 200.0, 80, 80), false)
 	var lines: Array = []
 	if run.mode == "run":
-		lines.append("到達階層: %d / %d" % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1])
+		lines.append(Loc.t("到達階層: %d / %d") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1])
 	else:
-		lines.append("到達ウェーブ: %d" % (run.wave + 1))
-	lines.append("撃破数: %d    戦闘数: %d" % [run.kills, run.battles])
-	lines.append("デッキ: %d枚    レリック: %d個    所持金: %dG" % [run.deck.size(), run.relics.size(), run.gold])
+		lines.append(Loc.t("到達ウェーブ: %d") % (run.wave + 1))
+	lines.append(Loc.t("撃破数: %d    戦闘数: %d") % [run.kills, run.battles])
+	lines.append(Loc.t("デッキ: %d枚    レリック: %d個    所持金: %dG") % [run.deck.size(), run.relics.size(), run.gold])
 	for i in lines.size():
 		ui.center(c, lines[i], 330.0 + i * 36.0, 24, Color.WHITE)
 	ui.button(c, "retry", Rect2(W / 2.0 - 330.0, 520.0, 300.0, 60.0), "もう一度", true, Color(1.0, 0.8, 0.35), 26)
@@ -1446,3 +1594,27 @@ func _run_autotest(delta: float) -> void:
 	if _autotest_t > 1500.0:
 		print("AUTOTEST timeout state=%s floor=%d" % [S.keys()[state], run.floor_idx])
 		get_tree().quit()
+
+## Headless gamepad navigation test: --padtest (prints PADTEST lines).
+func _padtest() -> void:
+	for i in 4:
+		await get_tree().process_frame
+	pad_mode = true
+	var seq: Array = []
+	for i in 3:
+		_pad_nav(Vector2.DOWN)
+		seq.append(focus_id)
+		await get_tree().process_frame
+	print("PADTEST focus seq=", seq)
+	_pad_nav(Vector2.UP)
+	print("PADTEST after up=", focus_id)
+	focus_id = "start"
+	_pad_button(JOY_BUTTON_A)
+	for i in 30:
+		await get_tree().process_frame
+	print("PADTEST state after A on start=", S.keys()[state])
+	_pad_button(JOY_BUTTON_B)
+	for i in 30:
+		await get_tree().process_frame
+	print("PADTEST state after B=", S.keys()[state])
+	get_tree().quit()
