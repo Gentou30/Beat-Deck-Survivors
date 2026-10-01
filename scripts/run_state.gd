@@ -16,6 +16,7 @@ var node_idx := -1
 var wave := 0  # endless: battles completed
 var kills := 0
 var battles := 0
+var dmg_taken := 0
 
 func setup(p_mode: String, p_char: String) -> void:
 	mode = p_mode
@@ -35,6 +36,7 @@ func setup(p_mode: String, p_char: String) -> void:
 	wave = 0
 	kills = 0
 	battles = 0
+	dmg_taken = 0
 	map = MapGen.generate() if p_mode == "run" else []
 
 func has_relic(id: String) -> bool:

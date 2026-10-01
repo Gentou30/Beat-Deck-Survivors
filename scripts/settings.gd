@@ -18,6 +18,11 @@ func _ready() -> void:
 		var i := AudioServer.bus_count - 1
 		AudioServer.set_bus_name(i, n)
 		AudioServer.set_bus_send(i, "Master")
+	var lp := AudioEffectLowPassFilter.new()
+	lp.cutoff_hz = 1100.0
+	var mi := AudioServer.get_bus_index("Music")
+	AudioServer.add_bus_effect(mi, lp, 0)
+	AudioServer.set_bus_effect_enabled(mi, 0, false)
 	load_cfg()
 	apply()
 

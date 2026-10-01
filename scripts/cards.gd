@@ -71,6 +71,17 @@ const SHORT := {
 	"feverboost": "フィーバー+{n}", "heartbeat": "{k}拍ごとHP+1", "thorns": "接触した敵に{n}",
 }
 
+const ART := {
+	"pulse": 129, "chain": 130, "nova": 127, "blades": 104, "bass": 118, "leech": 115, "heavy": 117,
+	"guard": 101, "mend": 114, "surge": 116, "frenzy": 107, "freeze": 128, "echo": 105,
+	"resonance": 125, "fortress": 102, "aura": 126, "pierce": 131, "meteor": 119, "drum": 82,
+	"sonic": 62, "replay": 60, "phase": 103, "pguard": 100, "overdrive": 106, "feverboost": 92,
+	"heartbeat": 61, "thorns": 76,
+}
+
+static func art(id: String) -> int:
+	return ART.get(base_id(id), 104)
+
 const TYPE_JA := {"attack": "アタック", "skill": "スキル", "power": "パワー"}
 
 static func is_upgraded(id: String) -> bool:

@@ -11,6 +11,7 @@ var buttons: Array = []  # {id, rect}
 var mouse := Vector2.ZERO
 var time := 0.0
 var touch := false
+var _tiles := {}
 var _hover_id := ""
 
 func begin(c: Control, delta: float) -> void:
@@ -38,6 +39,11 @@ func _reg(id: String, rect: Rect2) -> bool:
 ## Registers a clickable rect without drawing; returns hover state.
 func button_hit(_c: Control, id: String, r: Rect2) -> bool:
 	return _reg(id, r)
+
+func tile(i: int) -> Texture2D:
+	if not _tiles.has(i):
+		_tiles[i] = load("res://assets/kenney_tiny_dungeon/tile_%04d.png" % i)
+	return _tiles[i]
 
 func text(c: Control, s: String, pos: Vector2, size: int, col: Color, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
 	c.draw_string(font, pos + Vector2(1, 1), s, align, width, size, Color(0, 0, 0, col.a * 0.6))
@@ -108,6 +114,9 @@ func card(c: Control, id: String, r: Rect2, key: String, usable := true, sel := 
 	c.draw_string(font, rr.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 40.0, 13, nm_col)
 	c.draw_string(font, rr.position + Vector2(10, 56), Cards.TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
 	c.draw_multiline_string(font, rr.position + Vector2(10, 84), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 14, -1, Color(0.9, 0.9, 0.95, dim))
+	var art_r := Rect2(rr.position.x + rr.size.x / 2.0 - 21.0, rr.end.y - 62.0, 42.0, 42.0)
+	c.draw_circle(art_r.get_center(), 24.0, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.7 * dim))
+	c.draw_texture_rect(tile(Cards.art(id)), art_r, false, Color(1, 1, 1, dim))
 	if key != "" and not touch:
 		c.draw_string(font, rr.position + Vector2(0, rr.size.y - 8), "[" + key + "]", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 14, Color(1, 1, 1, 0.5 * dim))
 	return h

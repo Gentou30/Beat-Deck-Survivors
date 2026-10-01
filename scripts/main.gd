@@ -26,6 +26,7 @@ var battle: Battle
 var paused := false
 var deck_view := false
 var hud: Control
+var glow: Node2D
 var menu_pulse := 0.0
 var menu_idx := 0
 var settings_return: S = S.MENU
@@ -70,6 +71,14 @@ func _ready() -> void:
 	randomize()
 	font_res = load("res://assets/fonts/DotGothic16-Regular.ttf")
 	ui.font = font_res
+	glow = Node2D.new()
+	var gm := CanvasItemMaterial.new()
+	gm.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	glow.material = gm
+	add_child(glow)
+	glow.draw.connect(func() -> void:
+		if state == S.BATTLE and battle:
+			battle.draw_glow(glow))
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	hud = Control.new()
@@ -697,6 +706,7 @@ func _process(delta: float) -> void:
 	if _autotest or _shot_path != "":
 		_run_autotest(delta)
 	queue_redraw()
+	glow.queue_redraw()
 
 func _on_enter(s: S) -> void:
 	if s == S.BATTLE and battle == null:
@@ -1297,7 +1307,7 @@ func _run_autotest(delta: float) -> void:
 		S.TREASURE:
 			_click("treasure_take")
 		S.END:
-			print("AUTOTEST result=%s mode=%s char=%s floor=%d wave=%d kills=%d deck=%d relics=%d hp=%d/%d t=%.1f" % ["WON" if end_won else "LOST", run.mode, run.char_id, run.floor_idx, run.wave, run.kills, run.deck.size(), run.relics.size(), run.hp, run.max_hp, _autotest_t])
+			print("AUTOTEST result=%s mode=%s char=%s floor=%d wave=%d kills=%d deck=%d relics=%d hp=%d/%d dmg_taken=%d t=%.1f" % ["WON" if end_won else "LOST", run.mode, run.char_id, run.floor_idx, run.wave, run.kills, run.deck.size(), run.relics.size(), run.hp, run.max_hp, run.dmg_taken, _autotest_t])
 			get_tree().quit()
 	if _autotest_t > 1500.0:
 		print("AUTOTEST timeout state=%s floor=%d" % [S.keys()[state], run.floor_idx])

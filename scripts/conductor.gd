@@ -111,10 +111,18 @@ func choose_for_battle(mode: int) -> void:
 			opts.append(i)
 	set_track(opts.pick_random())
 
-func play_sfx(kind: String) -> void:
+func play_sfx(kind: String, pitch := 1.0) -> void:
 	if clock_only or not _sfx.has(kind):
 		return
-	(_sfx[kind] as AudioStreamPlayer).play()
+	var p := _sfx[kind] as AudioStreamPlayer
+	p.pitch_scale = pitch
+	p.play()
+
+## Low-pass the music (used when HP is critical).
+func set_muffle(on: bool) -> void:
+	var bi := AudioServer.get_bus_index("Music")
+	if AudioServer.get_bus_effect_count(bi) > 0:
+		AudioServer.set_bus_effect_enabled(bi, 0, on)
 
 var offset: float:
 	get:

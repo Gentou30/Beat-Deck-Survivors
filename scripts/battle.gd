@@ -72,6 +72,7 @@ class Fx:
 	var max_life := 0.4
 	var radius := 100.0
 	var size := 18
+	var tex: Texture2D
 
 var run: RunState
 var ui: Ui
@@ -145,6 +146,10 @@ var cast_grade := ""
 var cast_t := 0.0
 var slot_anim: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
 var done := false
+var cur_base := Transform2D.IDENTITY
+var player_vel := Vector2.ZERO
+var facing := 1.0
+var _muffled := false
 var end_timer := 0.0
 var end_won := false
 var elapsed := 0.0
@@ -205,6 +210,7 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 	Conductor.beat.connect(_beat_cb)
 
 func dispose() -> void:
+	Conductor.set_muffle(false)
 	if Conductor.beat.is_connected(_beat_cb):
 		Conductor.beat.disconnect(_beat_cb)
 
@@ -219,6 +225,20 @@ func good_window() -> float:
 func dmg_mult() -> float:
 	var per := 0.03 if run.has_relic("amp") else 0.02
 	return (2.0 if frenzy_beats > 0 else 1.0) * (1.5 if fever_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per)
+
+const THEMES := [
+	{"floor": Color(0.45, 0.85, 1.9), "line": Color(0.6, 0.5, 1.0), "tint": Color(0.4, 0.3, 0.9)},
+	{"floor": Color(1.9, 0.8, 0.45), "line": Color(1.0, 0.5, 0.3), "tint": Color(0.9, 0.35, 0.15)},
+	{"floor": Color(0.35, 1.6, 1.4), "line": Color(0.3, 1.0, 0.9), "tint": Color(0.1, 0.7, 0.6)},
+]
+
+func theme() -> Dictionary:
+	var i := 0
+	if run.mode == "run":
+		i = clampi(maxi(run.floor_idx, 0) / 4, 0, 2)
+	else:
+		i = (run.wave / 5) % 3
+	return THEMES[i]
 
 func fever_max() -> float:
 	return 8.0 if run.has_relic("headphones") else 10.0
@@ -612,6 +632,10 @@ func update(delta: float) -> void:
 		_lit[k] -= delta * 2.0
 		if _lit[k] <= 0.0:
 			_lit.erase(k)
+	var low := run.hp < run.max_hp * 0.25 and not done
+	if low != _muffled:
+		_muffled = low
+		Conductor.set_muffle(low)
 	if hitstop > 0.0:
 		hitstop -= delta
 		return
@@ -641,6 +665,13 @@ func _update_play(delta: float) -> void:
 		dir = bot_dir.call()
 	var spd := 270.0 * float(char_def["speed"]) * (1.15 if run.has_relic("boots") else 1.0)
 	var before := player_pos
+	player_vel = dir.normalized() * spd if dir.length() > 0.05 else Vector2.ZERO
+	if absf(dir.x) > 0.2:
+		facing = signf(dir.x)
+	else:
+		var nn := nearest_enemies(1)
+		if not nn.is_empty():
+			facing = signf((nn[0] as Enemy).pos.x - player_pos.x) if absf((nn[0] as Enemy).pos.x - player_pos.x) > 6.0 else facing
 	player_pos += dir.normalized() * spd * delta
 	player_pos = player_pos.clamp(Vector2(24, 24), Vector2(W - 24, ARENA_BOTTOM))
 	moved_dist += before.distance_to(player_pos)
@@ -781,6 +812,16 @@ func _update_play(delta: float) -> void:
 func _on_kill(e: Enemy) -> void:
 	kills += 1
 	run.kills += 1
+	if fxs.size() < 150:
+		var sf := Fx.new()
+		sf.kind = "sprite"
+		sf.pos = e.pos
+		sf.tex = e.tex
+		sf.radius = e.radius * 3.2
+		sf.to = Vector2(-1.0 if player_pos.x < e.pos.x else 1.0, 0.0)
+		sf.life = 0.45
+		sf.max_life = 0.45
+		fxs.append(sf)
 	if e.kind == "splitter":
 		for i in 2:
 			var sp := _make_enemy("grunt")
@@ -859,6 +900,7 @@ func damage_player(d: int) -> void:
 	shield -= absorbed
 	var real := d - absorbed
 	run.hp -= real
+	run.dmg_taken += real
 	burst(player_pos, Color(1, 0.3, 0.3), 16, 240.0, 0.5, 5.0)
 	if absorbed > 0:
 		ring(player_pos, 36.0, Color(0.5, 0.7, 1.0), 0.3)
@@ -1020,8 +1062,12 @@ func try_play(slot: int) -> void:
 	if grade != "MISS" and run.char_id == "wizard" and combo > 0 and combo % 5 == 0:
 		energy = mini(max_energy, energy + 1)
 		float_text(player_pos + Vector2(0, -80), "アルカナ +1", Color(0.8, 0.6, 1.0), 16)
-	Conductor.play_sfx(grade.to_lower())
-	Conductor.play_sfx("card")
+	var pitch := 1.0
+	if grade == "PERFECT":
+		var scale_st := [0, 2, 4, 7, 9]
+		pitch = pow(2.0, float(scale_st[combo % 5] + 12 * mini(combo / 5, 1)) / 12.0)
+	Conductor.play_sfx(grade.to_lower(), pitch)
+	Conductor.play_sfx("card", randf_range(0.94, 1.08))
 	plays += 1
 	if grade == "PERFECT":
 		perfects += 1
@@ -1224,17 +1270,21 @@ func draw_world(c: Node2D) -> void:
 		off = Vector2(randf_range(-shake, shake), randf_range(-shake, shake)) * 0.6
 	var z := 1.0 + 0.012 * pulse
 	var base := Transform2D(0.0, Vector2(z, z), 0.0, Vector2(W, ARENA_BOTTOM) / 2.0 * (1.0 - z) + off)
+	cur_base = base
+	var th := theme()
+	var fcol: Color = th["floor"]
+	var lcol: Color = th["line"]
 	c.draw_set_transform_matrix(base)
 	var floor_tex := tex(0)
 	for x in 20:
 		for y in 12:
 			var lit: float = _lit.get(Vector2i(x, y), 0.0)
-			var v := 0.30 + 0.06 * pulse + lit * 0.35
-			c.draw_texture_rect(floor_tex, Rect2(x * 64, y * 64, 64, 64), false, Color(v * 0.45, v * 0.85, v * 1.9))
+			var v := 0.40 + 0.06 * pulse + lit * 0.45
+			c.draw_texture_rect(floor_tex, Rect2(x * 64, y * 64, 64, 64), false, Color(v * fcol.r, v * fcol.g, v * fcol.b))
 	for s in _stars:
 		var a: float = 0.3 + 0.4 * sin(elapsed * 2.0 * s[2] + s[1])
 		c.draw_rect(Rect2(s[0], Vector2(2, 2)), Color(1, 1, 1, a * 0.5))
-	c.draw_rect(Rect2(0, ARENA_BOTTOM + 14, W, 3), Color(0.6, 0.5, 1.0, 0.25 + 0.3 * pulse))
+	c.draw_rect(Rect2(0, ARENA_BOTTOM + 14, W, 3), Color(lcol, 0.25 + 0.3 * pulse))
 
 	# telegraphs
 	for s in slams:
@@ -1271,12 +1321,6 @@ func draw_world(c: Node2D) -> void:
 			c.draw_arc(e.pos, e.radius + 5.0, 0.0, TAU, 48, Color(e.color, 0.8), 3.0)
 		if e.spawn_t > 0.0:
 			c.draw_arc(e.pos, 22.0 * (1.0 + e.spawn_t * 3.0), 0.0, TAU, 20, Color(1, 0.4, 0.4, 0.6), 2.0)
-	for b in bolts:
-		c.draw_circle(b.pos, 7.0, Color(b.color, 0.35))
-		c.draw_circle(b.pos, 4.0, b.color)
-	for sh in eshots:
-		c.draw_circle(sh.pos, 11.0, Color(1.0, 0.3, 0.5, 0.3))
-		c.draw_circle(sh.pos, 6.0, Color(1.0, 0.75, 0.85))
 	if blade_beats > 0:
 		for i in blade_n:
 			var a := blade_angle + i * TAU / blade_n
@@ -1287,10 +1331,13 @@ func draw_world(c: Node2D) -> void:
 	# player
 	var blink := invuln > 0.0 and int(invuln * 20.0) % 2 == 0
 	var ps := 52.0 + 8.0 * pulse
-	c.draw_circle(player_pos + Vector2(0, 22), 18.0, Color(0, 0, 0, 0.4))
+	var bob := 1.0 + 0.05 * sin(elapsed * (14.0 if player_vel.length() > 1.0 else 5.0))
+	var tilt := clampf(player_vel.x / 270.0, -1.0, 1.0) * 0.14
+	c.draw_circle(player_pos + Vector2(0, 24), 18.0, Color(0, 0, 0, 0.4))
 	c.draw_circle(player_pos, 34.0 + 6.0 * pulse, Color(char_def["color"] as Color, 0.12 + 0.1 * pulse))
-	var pw := ps * (-1.0 if player_pos.x > W / 2.0 and false else 1.0)
-	c.draw_texture_rect(tex(int(char_def["tile"])), Rect2(player_pos - Vector2(pw, ps) / 2.0, Vector2(pw, ps)), false, Color.WHITE if not blink else Color(1, 1, 1, 0.35))
+	c.draw_set_transform_matrix(base * Transform2D(tilt, Vector2(facing, 1.0), 0.0, player_pos + Vector2(0, 26)))
+	c.draw_texture_rect(tex(int(char_def["tile"])), Rect2(-ps / 2.0, -ps * bob, ps, ps * bob), false, Color.WHITE if not blink else Color(1, 1, 1, 0.35))
+	c.draw_set_transform_matrix(base)
 	if shield > 0:
 		c.draw_arc(player_pos, 26.0, 0.0, TAU, 32, Color(0.5, 0.7, 1.0, 0.9), 3.0)
 	if frenzy_beats > 0:
@@ -1303,22 +1350,16 @@ func draw_world(c: Node2D) -> void:
 		c.draw_arc(player_pos, 38.0, 0.0, TAU, 6, Color(0.85, 0.7, 1.0), 2.0)
 	_draw_mini_status(c)
 	_draw_cast(c)
-	# particles
-	for q in parts:
-		var k := q.life / q.max_life
-		c.draw_rect(Rect2(q.pos - Vector2(q.size, q.size) * 0.5 * k, Vector2(q.size, q.size) * k), Color(q.color, k))
-	# fx
+	# fx: sprites (death) and text stay in the normal pass; glows are in draw_glow()
 	for f in fxs:
 		var k := f.life / f.max_life
 		match f.kind:
-			"ring":
-				var r := f.radius * (1.0 - k * k * 0.9)
-				c.draw_arc(f.pos, r, 0.0, TAU, 48, Color(f.color, k), 4.0)
-			"line":
-				c.draw_line(f.pos, f.to, Color(f.color, k), 3.0)
-			"beam":
-				c.draw_line(f.pos, f.to, Color(f.color, k * 0.4), f.radius * 2.0 * k)
-				c.draw_line(f.pos, f.to, Color(1, 1, 1, k), maxf(1.0, f.radius * k * 0.6))
+			"sprite":
+				var fl: float = f.to.x
+				var sz := f.radius * (0.35 + 0.65 * k)
+				c.draw_set_transform_matrix(base * Transform2D((1.0 - k) * 3.0 * fl, Vector2(fl, 1.0), 0.0, f.pos))
+				c.draw_texture_rect(f.tex, Rect2(-sz / 2.0, -sz / 2.0, sz, sz), false, Color(1.0 + k * 2.0, 1.0 + k * 2.0, 1.0 + k * 2.0, k))
+				c.draw_set_transform_matrix(base)
 			"text":
 				var rise := 34.0 * (1.0 - k)
 				var pop := 1.0 + 0.5 * maxf(0.0, k - 0.8) * 5.0
@@ -1329,11 +1370,41 @@ func draw_world(c: Node2D) -> void:
 	var hp_frac := float(run.hp) / float(run.max_hp)
 	if hp_frac < 0.35:
 		_vignette(c, Color(0.9, 0.05, 0.1), (0.35 - hp_frac) * 1.4 + 0.1 * sin(elapsed * 6.0))
-	_vignette(c, Color(0.4, 0.3, 0.9), 0.12 * pulse)
+	_vignette(c, th["tint"], 0.12 * pulse)
 	if fever_beats > 0:
 		_vignette(c, Color(1.0, 0.8, 0.2), 0.2 + 0.12 * pulse)
 	if flash_a > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(flash_col, flash_a * 0.5))
+
+## Additive-blended layer: projectiles, particles, rings, beams. Drawn by main's glow node.
+func draw_glow(c: Node2D) -> void:
+	c.draw_set_transform_matrix(cur_base)
+	for bl in bolts:
+		c.draw_circle(bl.pos, 13.0, Color(bl.color, 0.22))
+		c.draw_circle(bl.pos, 7.0, Color(bl.color, 0.55))
+		c.draw_circle(bl.pos, 3.5, Color(1, 1, 1, 0.9))
+	for sh in eshots:
+		c.draw_circle(sh.pos, 16.0, Color(1.0, 0.25, 0.45, 0.22))
+		c.draw_circle(sh.pos, 8.0, Color(1.0, 0.45, 0.6, 0.6))
+		c.draw_circle(sh.pos, 4.0, Color(1, 0.9, 0.95, 0.95))
+	for q in parts:
+		var k := q.life / q.max_life
+		var sz := Vector2(q.size, q.size) * k
+		c.draw_rect(Rect2(q.pos - sz * 0.5, sz), Color(q.color, k * 0.9))
+	for f in fxs:
+		var k := f.life / f.max_life
+		match f.kind:
+			"ring":
+				var r := f.radius * (1.0 - k * k * 0.9)
+				c.draw_arc(f.pos, r, 0.0, TAU, 48, Color(f.color, k * 0.35), 9.0)
+				c.draw_arc(f.pos, r, 0.0, TAU, 48, Color(f.color, k), 3.0)
+			"line":
+				c.draw_line(f.pos, f.to, Color(f.color, k), 3.0)
+			"beam":
+				c.draw_line(f.pos, f.to, Color(f.color, k * 0.35), f.radius * 2.6 * k)
+				c.draw_line(f.pos, f.to, Color(f.color, k * 0.6), f.radius * 1.4 * k)
+				c.draw_line(f.pos, f.to, Color(1, 1, 1, k), maxf(1.0, f.radius * k * 0.5))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 ## Tiny HP / shield / energy readout hugging the player so the HUD corner needn't be checked.
 func _draw_mini_status(c: Node2D) -> void:
