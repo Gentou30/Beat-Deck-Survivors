@@ -37,6 +37,7 @@ var _manual_loop := false
 func _ready() -> void:
 	clock_only = DisplayServer.get_name() == "headless"
 	_music = AudioStreamPlayer.new()
+	_music.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 	_apply_track(0)
 	_music.volume_db = -6.0
 	_music.bus = "Music"
@@ -56,6 +57,7 @@ func _ready() -> void:
 	_sfx["win"] = load(d + "confirmation_004.ogg")
 	for k in _sfx:
 		var p := AudioStreamPlayer.new()
+		p.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		p.stream = _sfx[k]
 		p.volume_db = -6.0
 		p.bus = "SFX"

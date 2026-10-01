@@ -39,3 +39,4 @@ Hybrid of Vampire Survivors (auto-battle swarm), Slay the Spire (map run, deck, 
 - Rendering gotcha: `draw_texture_rect` with NEGATIVE width flips but keeps the rect's LEFT edge - use `x = center - abs(w)/2`.
 - Battle glow: projectiles/particles/rings are drawn in `Battle.draw_glow` on an additive Node2D created in main.gd.
 - Achievements/stats live in `Settings` (user://settings.cfg); tests never write it.
+- Web audio: Godot 4.3+ web exports default to *sample* playback, which was SILENT for us (runtime-created buses + MP3 + playback position). project.godot forces `audio/general/default_playback_type.web=0` and players set `playback_type = STREAM`. Verify with `tools/web_audio_test.js` (headless Chrome RMS probe); the in-app browser pane can't test audio (frames are throttled).

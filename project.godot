@@ -12,6 +12,11 @@ config/features=PackedStringArray("4.7")
 Settings="*res://scripts/settings.gd"
 Conductor="*res://scripts/conductor.gd"
 
+[audio]
+
+general/default_playback_type.web=0
+driver/output_latency.web=40
+
 [display]
 
 window/size/viewport_width=1280
