@@ -30,9 +30,11 @@ Each iteration: implement -> bot/headless test -> screenshots -> commit.
 - [x] I5 Reach (EN/JA, gamepad, reduce-flash, timing assist)
 - [x] I6 QA (human-like bot ~25% win at A0, fuzz via bots, enemy-flip rendering bug fixed, README/screenshots)
 
-## Next ideas (I7+)
-- Act 2 (new enemy set/boss, floors 11-20) and a 5th/6th character; more events (15+), relic synergies, curses.
-- Per-track note-charts: enemy/boss attacks keyed to actual drum hits; more music + track select.
+- [x] I7 Act 2 (red machine army, bomber, Maestro 3-phase final boss, 2-act runs), beat-accent-synced boss shots, Tiny Battle art
+
+## Next ideas (I8+)
+- A 5th/6th character; more events (15+), relic synergies, curses.
+- Full note-charts (hand-authored per track) and more music + track select.
 - Hand-made art pass (replace Kenney tiles with a unified custom style) and animated UI; shader glow/CRT option.
 - Real-device mobile perf/latency pass; PWA install; leaderboard for Daily Run.
 - Localisation of store page; trailer GIF; itch/Steam page copy.

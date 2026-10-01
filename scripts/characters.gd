@@ -12,7 +12,7 @@ const DB := {
 		"starter": ["chain", "chain", "chain", "pulse", "pulse", "surge", "surge", "frenzy", "guard", "blades"]},
 	"drummer": {"name": "ドラマー", "tile": 86, "hp": 58, "speed": 1.0, "color": Color(1.0, 0.78, 0.35),
 		"passive": "リズムマスター", "passive_desc": "PERFECT判定の幅+25ms。コンボ1あたりのダメージ上昇+1%。",
-		"unlock": "ステージ攻略を1回クリアで解放",
+		"unlock": "ステージ攻略で第1幕のボスを倒すと解放",
 		"starter": ["drum", "drum", "pulse", "pulse", "chain", "guard", "guard", "sonic", "surge", "frenzy"]},
 }
 

@@ -16,7 +16,7 @@ var reduce_flash := false
 var assist := 0  # 0 off, 1 wide, 2 very wide timing windows
 var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
 var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0,
-	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1}
+	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1, "act1": 0, "full_clears": 0}
 var ach := {}
 var char_wins := {}
 var bosses := {}
@@ -110,6 +110,6 @@ func unlock(id: String) -> bool:
 
 func chars_unlocked() -> Array:
 	var out: Array = ["wizard", "knight", "ranger"]
-	if stats["wins"] >= 1:
+	if stats["wins"] >= 1 or stats["act1"] >= 1:
 		out.append("drummer")
 	return out

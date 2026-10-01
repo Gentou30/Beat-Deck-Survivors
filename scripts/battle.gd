@@ -13,7 +13,9 @@ const TILE_DIR := "res://assets/kenney_tiny_dungeon/tile_%04d.png"
 const TILE_SWORD := 104
 const GOOD_BASE := 0.14
 const PERFECT_BASE := 0.07
-const BOSS_NAMES := {"bass": "ベースデーモン", "drum": "ドラムメイジ", "metronome": "メトロノーム・ジャイアント"}
+const BOSS_NAMES := {"bass": "ベースデーモン", "drum": "ドラムメイジ", "metronome": "メトロノーム・ジャイアント", "maestro": "マエストロ"}
+const TILE_DIR2 := "res://assets/kenney_tiny_battle/tile_%04d.png"
+const ACT2_TILES := {"grunt": 160, "fast": 154, "tank": 152, "shooter": 153, "charger": 150, "splitter": 155, "elite": 158, "bomber": 173}
 
 class Enemy:
 	var pos := Vector2.ZERO
@@ -37,6 +39,7 @@ class Enemy:
 	var dash_dir := Vector2.ZERO
 	var boss_id := ""
 	var thorn_cd := 0.0
+	var bphase := 0
 
 class Bolt:
 	var pos := Vector2.ZERO
@@ -159,6 +162,7 @@ var _lit := {}
 var _stars: Array = []
 var _tex_cache := {}
 var _beat_cb: Callable
+var _step_cb: Callable
 
 func _init() -> void:
 	for i in 70:
@@ -168,6 +172,12 @@ func tex(i: int) -> Texture2D:
 	if not _tex_cache.has(i):
 		_tex_cache[i] = load(TILE_DIR % i)
 	return _tex_cache[i]
+
+func tex2(i: int) -> Texture2D:
+	var key := 1000 + i
+	if not _tex_cache.has(key):
+		_tex_cache[key] = load(TILE_DIR2 % i)
+	return _tex_cache[key]
 
 func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 	run = p_run
@@ -209,11 +219,15 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 	banner_time = 2.2
 	_beat_cb = Callable(self, "on_beat")
 	Conductor.beat.connect(_beat_cb)
+	_step_cb = Callable(self, "on_step")
+	Conductor.step.connect(_step_cb)
 
 func dispose() -> void:
 	Conductor.set_muffle(false)
 	if Conductor.beat.is_connected(_beat_cb):
 		Conductor.beat.disconnect(_beat_cb)
+	if Conductor.step.is_connected(_step_cb):
+		Conductor.step.disconnect(_step_cb)
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -231,11 +245,14 @@ const THEMES := [
 	{"floor": Color(0.45, 0.85, 1.9), "line": Color(0.6, 0.5, 1.0), "tint": Color(0.4, 0.3, 0.9)},
 	{"floor": Color(1.9, 0.8, 0.45), "line": Color(1.0, 0.5, 0.3), "tint": Color(0.9, 0.35, 0.15)},
 	{"floor": Color(0.35, 1.6, 1.4), "line": Color(0.3, 1.0, 0.9), "tint": Color(0.1, 0.7, 0.6)},
+	{"floor": Color(0.55, 1.05, 1.9), "line": Color(0.45, 0.75, 1.0), "tint": Color(0.2, 0.4, 0.9)},
 ]
 
 func theme() -> Dictionary:
 	var i := 0
-	if run.mode == "run":
+	if run.mode == "run" and run.act == 2:
+		i = 3 if run.floor_idx < 5 else 2
+	elif run.mode == "run":
 		i = clampi(maxi(run.floor_idx, 0) / 4, 0, 2)
 	else:
 		i = (run.wave / 5) % 3
@@ -270,6 +287,21 @@ func _start_fever() -> void:
 			e.pos += (e.pos - player_pos).normalized() * 60.0
 
 func _pick_kind() -> String:
+	if run.act == 2 and run.mode == "run":
+		var r2 := randf()
+		if r2 < 0.12:
+			return "tank"
+		if r2 < 0.25:
+			return "shooter"
+		if r2 < 0.35:
+			return "charger"
+		if r2 < 0.43:
+			return "splitter"
+		if r2 < 0.57:
+			return "bomber"
+		if r2 < 0.72:
+			return "fast"
+		return "grunt"
 	var r := randf()
 	if diff >= 2.2 and r < 0.12:
 		return "tank"
@@ -351,6 +383,13 @@ func _make_enemy(k: String) -> Enemy:
 				e.radius = 38.0
 				e.color = Color(0.5, 0.7, 1.0)
 				e.tex = tex(111)
+			elif boss_id == "maestro":
+				e.max_hp = 420.0 + 90.0 * d
+				e.speed = 40.0
+				e.radius = 54.0
+				e.dmg = 16
+				e.color = Color(1.0, 0.35, 0.35)
+				e.tex = tex2(68)
 			elif boss_id == "metronome":
 				e.max_hp = 300.0 + 80.0 * d
 				e.speed = 44.0
@@ -371,6 +410,13 @@ func _make_enemy(k: String) -> Enemy:
 			e.dmg = 7 + int(d)
 			e.color = Color(1.0, 0.6, 0.4)
 			e.tex = tex(123)
+		"bomber":
+			e.max_hp = 12.0 + 5.0 * d
+			e.speed = 105.0 + 4.0 * d
+			e.radius = 13.0
+			e.dmg = 9 + int(d * 0.6)
+			e.color = Color(1.0, 0.55, 0.2)
+			e.tex = tex(120)
 		"splitter":
 			e.max_hp = 28.0 + 10.0 * d
 			e.speed = 54.0 + 3.0 * d
@@ -406,6 +452,8 @@ func _make_enemy(k: String) -> Enemy:
 			e.dmg = 4 + int(d)
 			e.color = Color(0.4, 1.0, 0.8)
 			e.tex = tex(108)
+	if run.act == 2 and run.mode == "run" and k != "boss" and ACT2_TILES.has(k):
+		e.tex = tex2(ACT2_TILES[k])
 	var hpm := 1.0 + 0.1 * run.asc + (0.25 if run.mod_id == 1 else 0.0)
 	if k == "boss" and run.asc >= 4:
 		hpm *= 1.25
@@ -574,14 +622,74 @@ func on_beat(_n: int) -> void:
 					if e.tele == 0:
 						e.dash_dir = e.aim_dir
 						e.dash_t = 0.45
+			"bomber":
+				if e.ctr >= 6:
+					_bomber_boom(e)
 			"elite":
 				if e.ctr % 8 == 4:
 					slams.append({"pos": player_pos, "r": 120.0, "t": 4.0 * Conductor.spb, "dmg": 10})
 			"boss":
 				_boss_beat(e, to_p)
 
+func _bomber_boom(e: Enemy) -> void:
+	if e.hp <= 0.0:
+		return
+	e.hp = 0.0
+	ring(e.pos, 95.0, Color(1.0, 0.55, 0.2), 0.4)
+	burst(e.pos, Color(1.0, 0.6, 0.2), 26, 300.0, 0.5, 5.0, 100.0)
+	do_shake(6.0)
+	Conductor.play_sfx("boom")
+	if invuln <= 0.0 and e.pos.distance_to(player_pos) < 95.0 + 14.0:
+		damage_player(e.dmg)
+
+## Boss shots keyed to the music's actual off-beat accents (measured per track).
+func on_step(n: int) -> void:
+	if ending or tutorial or kind != "boss":
+		return
+	if not ((n % 16) in Conductor.hits):
+		return
+	for e in enemies:
+		if e.kind == "boss" and e.spawn_t <= 0.0 and (e.boss_id == "drum" or e.boss_id == "maestro"):
+			_eshot(e.pos, player_pos - e.pos, 270.0, 5 + int(diff * 0.5))
+			ring(e.pos, e.radius + 8.0, Color(1.0, 0.5, 0.7), 0.18)
+
 func _boss_beat(e: Enemy, to_p: Vector2) -> void:
 	match e.boss_id:
+		"maestro":
+			var f := e.hp / e.max_hp
+			var ph := 0 if f > 0.66 else (1 if f > 0.33 else 2)
+			if ph != e.bphase:
+				e.bphase = ph
+				banner = "PHASE %d" % (ph + 1)
+				banner_time = 1.6
+				flash(Color(1.0, 0.4, 0.4), 0.4)
+				ring(e.pos, 420.0, Color(1.0, 0.4, 0.4), 0.6)
+				do_shake(12.0)
+				Conductor.play_sfx("big")
+			if e.ctr % 4 == 0:
+				var off := e.ctr * 0.31
+				for i in 10:
+					_eshot(e.pos, Vector2.from_angle(off + i * TAU / 10.0), 210.0, 7 + int(diff * 0.4))
+			if e.ctr % 8 == 0:
+				slams.append({"pos": player_pos, "r": 150.0, "t": 4.0 * Conductor.spb, "dmg": 14})
+			if ph >= 1:
+				if e.ctr % 8 == 4:
+					e.tele = 2
+					e.aim_dir = to_p
+				elif e.tele > 0:
+					e.tele -= 1
+					if e.tele == 0:
+						e.dash_dir = e.aim_dir
+						e.dash_t = 0.6
+			if ph >= 2:
+				if e.ctr % 8 == 6:
+					for i in 7:
+						_eshot(e.pos, to_p.rotated((i - 3) * 0.2), 290.0, 8 + int(diff * 0.4))
+				if e.ctr % 16 == 8:
+					for i in 3:
+						var mm := _make_enemy("grunt")
+						mm.pos = e.pos + Vector2.from_angle(i * TAU / 3.0) * 70.0
+						enemies.append(mm)
 		"drum":
 			if e.ctr % 4 == 0:
 				var off := e.ctr * 0.37
@@ -728,7 +836,7 @@ func _update_play(delta: float) -> void:
 			"boss":
 				if e.boss_id == "drum":
 					mv = _keep_distance(e, to_p, 380.0, 260.0)
-				elif e.boss_id == "metronome":
+				elif e.boss_id == "metronome" or e.boss_id == "maestro":
 					if e.tele > 0:
 						moving = false
 					elif e.dash_t > 0.0:
@@ -742,7 +850,9 @@ func _update_play(delta: float) -> void:
 			if thorns > 0 and e.thorn_cd <= 0.0:
 				hit(e, float(thorns))
 				e.thorn_cd = 0.4
-			if invuln <= 0.0:
+			if e.kind == "bomber":
+				_bomber_boom(e)
+			elif invuln <= 0.0:
 				damage_player(e.dmg)
 
 	for sh in eshots:

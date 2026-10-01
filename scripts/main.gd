@@ -34,6 +34,9 @@ var sel_mode := "run"
 var sel_char := 0
 var sel_asc := 0
 var toasts: Array = []
+var sel_long := true
+var act_clear := false
+var act_banner := 0.0
 var bg_parts: Array = []
 var drag_id := ""
 var touch_mode := false
@@ -129,6 +132,8 @@ func _ready() -> void:
 				if a.begins_with("--asc="):
 					asc_arg = int(a.substr(6))
 			start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % Characters.ORDER.size()], asc_arg)
+			if "--act2" in args and run.mode == "run":
+				run.start_act2()
 	elif _screen_arg != "":
 		_debug_screen(_screen_arg)
 
@@ -158,9 +163,11 @@ func start_daily() -> void:
 	Settings.stats["runs"] += 1
 	goto(S.MAP)
 
-func start_run(mode: String, char_id: String, asc := 0) -> void:
+func start_run(mode: String, char_id: String, asc := 0, long_run := true) -> void:
 	run = RunState.new()
 	run.setup(mode, char_id, asc)
+	run.long_run = long_run
+	act_clear = false
 	paused = false
 	deck_view = false
 	endless_queue.clear()
@@ -184,7 +191,7 @@ func _start_battle(kind: String) -> void:
 	if kind == "tutorial":
 		diff = 0.6
 	elif run.mode == "run":
-		diff = 1.0 + maxf(0.0, run.floor_idx) * 0.5
+		diff = (6.0 + maxf(0.0, run.floor_idx) * 0.4) if run.act == 2 else (1.0 + maxf(0.0, run.floor_idx) * 0.5)
 	else:
 		diff = 1.0 + run.wave * 0.35
 	Conductor.choose_for_battle(0 if kind == "tutorial" else Settings.bgm)
@@ -210,15 +217,22 @@ func _on_battle_done(won: bool, kind: String) -> void:
 		_end_run(false)
 		return
 	if kind == "boss" and run.mode == "run":
-		_end_run(true)
-		return
+		if run.act == 1 and run.long_run:
+			act_clear = true
+			Settings.stats["act1"] += 1
+			Settings.unlock("first_clear")
+		else:
+			_end_run(true)
+			return
 	var base := 14 + randi() % 8
 	if kind == "elite":
 		base = 32 + randi() % 10
+	elif kind == "boss":
+		base = 70 + randi() % 20
 	base += battle.kills / 15
 	reward_gold = run.gain_gold(base)
 	reward_relic = ""
-	if kind == "elite":
+	if kind == "elite" or act_clear:
 		var r := Relics.random_ids(1, run.relics)
 		if not r.is_empty():
 			reward_relic = r[0]
@@ -250,6 +264,9 @@ func _end_run(won: bool) -> void:
 		if won:
 			st["wins"] += 1
 			Settings.unlock("first_clear")
+			if run.act == 2:
+				st["full_clears"] += 1
+				Settings.unlock("trueclear")
 			Settings.char_wins[run.char_id] = int(Settings.char_wins.get(run.char_id, 0)) + 1
 			if run.daily:
 				Settings.unlock("daily")
@@ -277,6 +294,14 @@ func proceed() -> void:
 	deck_view = false
 	if run.deck.size() >= 25:
 		Settings.unlock("deck25")
+	if act_clear:
+		act_clear = false
+		run.start_act2()
+		Settings.unlock("act2")
+		act_banner = 3.5
+		Conductor.play_sfx("big")
+		goto(S.MAP)
+		return
 	if run.mode == "run":
 		goto(S.MAP)
 		return
@@ -712,6 +737,8 @@ func _click(id: String) -> void:
 			start_daily()
 		"records":
 			goto(S.RECORDS)
+		"len":
+			sel_long = not sel_long
 		"asc-":
 			sel_asc = maxi(0, sel_asc - 1)
 		"asc+":
@@ -726,7 +753,7 @@ func _click(id: String) -> void:
 				S.PICK: goto(pick_return)
 		"go":
 			if Characters.ORDER[sel_char] in Settings.chars_unlocked():
-				start_run(sel_mode, Characters.ORDER[sel_char], sel_asc if sel_mode == "run" else 0)
+				start_run(sel_mode, Characters.ORDER[sel_char], sel_asc if sel_mode == "run" else 0, sel_long)
 		"menu":
 			if battle:
 				battle.dispose()
@@ -901,6 +928,7 @@ func _calib_tap() -> void:
 func _process(delta: float) -> void:
 	t += delta
 	menu_pulse = maxf(0.0, menu_pulse - delta * 4.0)
+	act_banner = maxf(0.0, act_banner - delta)
 	for tt in toasts:
 		tt["t"] -= delta
 	toasts = toasts.filter(func(x: Dictionary) -> bool: return x["t"] > 0.0)
@@ -1051,7 +1079,7 @@ func _draw_mode(c: Control) -> void:
 	var day := int(d["year"]) * 10000 + int(d["month"]) * 100 + int(d["day"])
 	var dmod: int = day % 3
 	var modes := [
-		["mode:run", "ステージ攻略", "10階層のマップを進み、最上階のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\n難易度(アセンション)で何度も挑める。", Color(0.9, 0.5, 0.4), 84,
+		["mode:run", "ステージ攻略", "2つの幕(各10階+ボス)を勝ち抜き、最後のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\n難易度(アセンション)で何度も挑める。", Color(0.9, 0.5, 0.4), 84,
 			Loc.t("クリア %d回 / 最高 %d階") % [Settings.stats["wins"], Settings.stats["best_floor"]]],
 		["mode:endless", "エンドレス", "ウェーブが延々と続くサバイバル。\n勝ち抜くごとにカード報酬。\n10ウェーブごとにボスが出現！", Color(0.5, 0.8, 1.0), 108,
 			Loc.t("最高 %dウェーブ") % Settings.stats["endless_best"]],
@@ -1114,6 +1142,8 @@ func _draw_char(c: Control) -> void:
 		ui.button(c, "asc+", Rect2(W / 2.0 + 280.0, 530.0, 50.0, 40.0), "▶", sel_asc < mini(5, au), Color(0.6, 0.6, 0.9), 20)
 		ui.text(c, Loc.t("アセンション %d") % sel_asc, Vector2(0, 556.0), 22, Color(1, 0.7, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
 		ui.text(c, RunState.ASC_TEXT[sel_asc] + ("" if au >= 5 else "  (クリアで次の段階が解放)"), Vector2(0, 582.0), 14, Color(0.85, 0.85, 0.95), HORIZONTAL_ALIGNMENT_CENTER, W)
+	if sel_mode == "run":
+		ui.button(c, "len", Rect2(W - 330.0, H - 82.0, 290.0, 48.0), "長さ: 2幕(フル)" if sel_long else "長さ: 1幕(ショート)", true, Color(0.9, 0.7, 0.3), 17)
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
 	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", Characters.ORDER[sel_char] in unl, Color(1.0, 0.8, 0.35), 30)
 
@@ -1220,7 +1250,7 @@ func _run_bar(c: Control, show_deck := true) -> void:
 	ui.bar(c, Rect2(58, 10, 200, 16), float(run.hp) / run.max_hp, Color(0.85, 0.25, 0.3))
 	ui.text(c, "HP %d/%d" % [run.hp, run.max_hp], Vector2(64, 24), 13, Color.WHITE)
 	ui.text(c, "%d G" % run.gold, Vector2(58, 46), 17, Color(1, 0.85, 0.3))
-	var fl := Loc.t("ウェーブ %d") % (run.wave + 1) if run.mode == "endless" else Loc.t("%d / %d階") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1]
+	var fl := Loc.t("ウェーブ %d") % (run.wave + 1) if run.mode == "endless" else (Loc.t("第%d幕  %d / %d階") % [run.act, maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1] if run.long_run else Loc.t("%d / %d階") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1])
 	ui.text(c, fl, Vector2(150, 46), 15, Color(0.85, 0.85, 1.0))
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(300 + i * 34, 12, 30, 30), "relic:%d" % i)
@@ -1290,6 +1320,10 @@ func _draw_map(c: Control) -> void:
 		ui.text(c, NODE_NAME[k], Vector2(56, ly + 5.0), 14, Color(0.85, 0.85, 0.95))
 		ly += 30.0
 	ui.center(c, "進む場所を選べ", 82.0, 18, Color(1, 0.95, 0.7))
+	if act_banner > 0.0:
+		var ab := minf(1.0, act_banner)
+		c.draw_rect(Rect2(0, 250, W, 120), Color(0, 0, 0, 0.6 * ab))
+		ui.center(c, Loc.t("第%d幕  開幕") % run.act, 330.0, 64, Color(1, 0.6, 0.4, ab))
 	_relic_tips(c)
 
 func _node_pos(f: int, j: int) -> Vector2:
@@ -1462,7 +1496,7 @@ func _draw_end(c: Control) -> void:
 	c.draw_texture_rect(tex(int(cd["tile"])), Rect2(W / 2.0 - 40.0, 200.0, 80, 80), false)
 	var lines: Array = []
 	if run.mode == "run":
-		lines.append(Loc.t("到達階層: %d / %d") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1])
+		lines.append((Loc.t("到達: 第%d幕  %d / %d階") % [run.act, maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1]) if run.long_run else (Loc.t("到達階層: %d / %d") % [maxi(0, run.floor_idx + 1), MapGen.FLOORS + 1]))
 	else:
 		lines.append(Loc.t("到達ウェーブ: %d") % (run.wave + 1))
 	lines.append(Loc.t("撃破数: %d    戦闘数: %d") % [run.kills, run.battles])
@@ -1530,7 +1564,14 @@ func _debug_screen(sname: String) -> void:
 			end_won = true
 			state = S.END
 		_:
-			if sname.begins_with("boss_"):
+			if sname == "act2" or sname == "maestro":
+				run.start_act2()
+				run.floor_idx = 3
+				run.node_idx = 0
+				run.max_hp = 400
+				run.hp = 400
+				_start_battle("boss" if sname == "maestro" else "battle")
+			elif sname.begins_with("boss_"):
 				run.boss_id = sname.substr(5)
 				_start_battle("boss")
 			else:
@@ -1547,7 +1588,7 @@ func _run_autotest(delta: float) -> void:
 			if id != "" and battle.energy >= int(Cards.def(id)["cost"]):
 				battle.try_play(i)
 				break
-	if _shot_path != "" and _autotest_t > (7.0 if (_screen_arg in ["boss", "elite", "battle"] or _screen_arg.begins_with("boss_")) else 1.0) and pending < 0:
+	if _shot_path != "" and _autotest_t > (7.0 if (_screen_arg in ["boss", "elite", "battle", "act2", "maestro"] or _screen_arg.begins_with("boss_")) else 1.0) and pending < 0:
 		get_viewport().get_texture().get_image().save_png(_shot_path)
 		print("shot saved")
 		get_tree().quit()
@@ -1624,7 +1665,7 @@ func _run_autotest(delta: float) -> void:
 		S.TREASURE:
 			_click("treasure_take")
 		S.END:
-			print("AUTOTEST result=%s mode=%s char=%s floor=%d wave=%d kills=%d deck=%d relics=%d hp=%d/%d dmg_taken=%d t=%.1f" % ["WON" if end_won else "LOST", run.mode, run.char_id, run.floor_idx, run.wave, run.kills, run.deck.size(), run.relics.size(), run.hp, run.max_hp, run.dmg_taken, _autotest_t])
+			print("AUTOTEST result=%s act=%d mode=%s char=%s floor=%d wave=%d kills=%d deck=%d relics=%d hp=%d/%d dmg_taken=%d t=%.1f" % ["WON" if end_won else "LOST", run.act, run.mode, run.char_id, run.floor_idx, run.wave, run.kills, run.deck.size(), run.relics.size(), run.hp, run.max_hp, run.dmg_taken, _autotest_t])
 			get_tree().quit()
 	if _autotest_t > 1500.0:
 		print("AUTOTEST timeout state=%s floor=%d" % [S.keys()[state], run.floor_idx])

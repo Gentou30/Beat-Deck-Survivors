@@ -17,7 +17,9 @@ const DB := {
 	"allchars": {"name": "全員集合", "desc": "すべてのキャラでクリアする。"},
 	"kills1000": {"name": "千体撃破", "desc": "累計1000体を倒す。"},
 	"daily": {"name": "デイリー挑戦", "desc": "デイリーランをクリアする。"},
+	"act2": {"name": "第2幕へ", "desc": "第2幕に到達する。"},
+	"trueclear": {"name": "真のクリア", "desc": "最終ボス「マエストロ」を倒す。"},
 }
 
 const ORDER := ["tutorial", "first_clear", "combo10", "combo20", "fever", "potion", "relic8", "deck25",
-	"boss3", "flawless", "endless10", "endless20", "asc3", "allchars", "kills1000", "daily"]
+	"boss3", "flawless", "endless10", "endless20", "asc3", "allchars", "kills1000", "daily", "act2", "trueclear"]

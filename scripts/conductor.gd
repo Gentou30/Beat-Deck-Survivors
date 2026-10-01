@@ -3,6 +3,7 @@ extends Node
 ## and exposes song_time / beat signal / timing-offset helpers for rhythm judging.
 
 signal beat(n: int)
+signal step(n: int)  # 16th-note grid
 
 const MIX_RATE := 22050
 const LOOP_BEATS := 8
@@ -10,14 +11,16 @@ const LOOP_BEATS := 8
 ## longer than `beats`, so we restart playback at exactly `beats` instead of stream looping.
 ## offset = time of the first beat inside the file (seconds).
 const TRACKS := [
-	{"name": "Party Sector", "path": "res://assets/music/party_sector.mp3", "bpm": 120.0, "beats": 192, "offset": 0.0},
-	{"name": "Dreaming of Victory", "path": "res://assets/music/dreaming_of_victory.mp3", "bpm": 120.0, "beats": 208, "offset": -0.04},
-	{"name": "Porkymon Battle", "path": "res://assets/music/pkmn_battle_main.mp3", "bpm": 148.0, "beats": 64, "offset": 0.0},
+	{"name": "Party Sector", "path": "res://assets/music/party_sector.mp3", "bpm": 120.0, "beats": 192, "offset": 0.0, "hits": [2, 6, 14]},
+	{"name": "Dreaming of Victory", "path": "res://assets/music/dreaming_of_victory.mp3", "bpm": 120.0, "beats": 208, "offset": -0.04, "hits": [6, 11, 15]},
+	{"name": "Porkymon Battle", "path": "res://assets/music/pkmn_battle_main.mp3", "bpm": 148.0, "beats": 64, "offset": 0.0, "hits": [4, 12]},
 ]
 
 var track_idx := 0
 var bpm := 120.0
 var track_offset := 0.0
+var hits: Array = []  # off-beat 16th steps (0..15 per bar) where the music accents; measured per track
+var _last_step := -1
 var spb: float = 0.5
 var song_time: float = 0.0
 var running: bool = false
@@ -65,6 +68,7 @@ func _apply_track(i: int) -> void:
 	bpm = t["bpm"]
 	spb = 60.0 / bpm
 	track_offset = t["offset"]
+	hits = t.get("hits", [])
 	if ResourceLoader.exists(t["path"]):
 		_music.stream = load(t["path"])
 		_loop_len = spb * int(t["beats"])
@@ -82,6 +86,7 @@ func _reset_clock() -> void:
 	_loops = 0
 	_last_pos = 0.0
 	_last_beat = -1
+	_last_step = -1
 
 func start() -> void:
 	_reset_clock()
@@ -157,6 +162,10 @@ func _process(delta: float) -> void:
 	while _last_beat < cur:
 		_last_beat += 1
 		beat.emit(_last_beat)
+	var cs := floori((song_time - offset) / (spb / 4.0))
+	while _last_step < cs:
+		_last_step += 1
+		step.emit(_last_step)
 
 ## Seconds from the nearest beat; positive = late, negative = early.
 func beat_offset() -> float:

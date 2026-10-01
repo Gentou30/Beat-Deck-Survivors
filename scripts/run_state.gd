@@ -19,10 +19,13 @@ var battles := 0
 var dmg_taken := 0
 var asc := 0
 var daily := false
+var act := 1
+var long_run := true
 var mod_id := -1
 
 func setup(p_mode: String, p_char: String, p_asc := 0) -> void:
 	asc = p_asc
+	act = 1
 	mode = p_mode
 	char_id = p_char
 	var c: Dictionary = Characters.DB[p_char]
@@ -96,6 +99,7 @@ func setup_daily(day_seed: int) -> void:
 	var avail := Settings.chars_unlocked()
 	setup("run", avail[day_seed % avail.size()], 1)
 	daily = true
+	long_run = false
 	mod_id = day_seed % 3
 	match mod_id:
 		0:
@@ -105,3 +109,11 @@ func setup_daily(day_seed: int) -> void:
 			max_hp = int(max_hp * 0.85)
 			hp = max_hp
 	randomize()
+
+func start_act2() -> void:
+	act = 2
+	boss_id = "maestro"
+	floor_idx = -1
+	node_idx = -1
+	map = MapGen.generate()
+	heal(int(max_hp * 0.3))

@@ -10,6 +10,7 @@ A swarm-survival roguelike where your weapons are a **deck of cards** and every 
 | ![menu](docs/screenshots/menu.png) | ![battle](docs/screenshots/battle.png) |
 | ![boss](docs/screenshots/boss_metronome.png) | ![map](docs/screenshots/map.png) |
 | ![characters](docs/screenshots/char.png) | ![shop](docs/screenshots/shop.png) |
+| ![act2](docs/screenshots/act2.png) | |
 
 ## How it plays
 - Move with **WASD / arrows / left stick / drag**. Enemies swarm you; a weak auto-bolt fires every beat.
@@ -19,8 +20,9 @@ A swarm-survival roguelike where your weapons are a **deck of cards** and every 
 
 ## Content
 - 4 characters (1 unlockable), 27 cards (+ upgrades, powers, exhaust), 18 relics, 6 potions, 5 events
-- Branching 10-floor map + boss, Endless mode (boss every 10 waves), Daily Run (fixed map + modifier)
-- Ascension 0-5, 16 achievements, records
+- **2 acts** (10 floors + boss each; Act 2 = a red machine army and the final boss *Maestro* with 3 phases), Endless mode (boss every 10 waves), Daily Run (fixed map + modifier)
+- Boss bullet patterns are locked to the beat grid, and the Drum Mage / Maestro also fire on the track's measured off-beat accents
+- Ascension 0-5, 18 achievements, records
 - 3 CC0 music tracks (BPM-aligned), interactive tutorial, timing calibration, English / Japanese
 - Accessibility: reduce flashes/shake, timing assist, adjustable offset; mobile web + gamepad support
 
