@@ -33,6 +33,11 @@ var sel_mode := "run"
 var sel_char := 0
 var bg_parts: Array = []
 var drag_id := ""
+var touch_mode := false
+var joy_id := -1
+var joy_origin := Vector2.ZERO
+var joy_pos := Vector2.ZERO
+var scroll_acc := 0.0
 var tex_cache := {}
 var font_res: Font
 
@@ -300,34 +305,85 @@ func _begin() -> void:
 	Conductor.play_sfx("select")
 	goto(S.MENU)
 
+func _press(p: Vector2) -> void:
+	var id := ui.hit(p)
+	if id.begins_with("sl:"):
+		drag_id = id
+		_slide(id, p.x)
+	elif id != "":
+		_click(id)
+	elif state == S.CALIB:
+		_calib_tap()
+
+func _release() -> void:
+	if drag_id != "":
+		drag_id = ""
+		Settings.save_cfg()
+
+func _touch_input(event: InputEvent) -> void:
+	# Touch is handled directly (mouse emulation is off) so a held joystick finger
+	# never blocks a second finger from tapping cards.
+	if event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		touch_mode = true
+		if st.pressed:
+			var in_arena := state == S.BATTLE and battle != null and not paused and not deck_view 				and st.position.y < Battle.ARENA_BOTTOM + 30.0 and ui.hit(st.position) == ""
+			if in_arena and joy_id == -1:
+				joy_id = st.index
+				joy_origin = st.position
+				joy_pos = st.position
+			elif st.index != joy_id:
+				_press(st.position)
+		else:
+			if st.index == joy_id:
+				joy_id = -1
+				if battle:
+					battle.touch_dir = Vector2.ZERO
+			else:
+				_release()
+	elif event is InputEventScreenDrag:
+		var sd := event as InputEventScreenDrag
+		if sd.index == joy_id:
+			joy_pos = sd.position
+			var v := (joy_pos - joy_origin) / 70.0
+			v = v.limit_length(1.0)
+			if battle:
+				battle.touch_dir = v if v.length() > 0.15 else Vector2.ZERO
+		elif drag_id != "":
+			_slide(drag_id, sd.position.x)
+		elif state == S.PICK or deck_view:
+			scroll_acc += sd.relative.y
+			while scroll_acc > 48.0:
+				pick_scroll = maxi(0, pick_scroll - 1)
+				scroll_acc -= 48.0
+			while scroll_acc < -48.0:
+				pick_scroll += 1
+				scroll_acc += 48.0
+
 func _unhandled_input(event: InputEvent) -> void:
 	if fade > 0.3:
 		return
 	if state == S.SPLASH:
-		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed):
+		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed) 				or (event is InputEventScreenTouch and event.pressed):
+			if event is InputEventScreenTouch:
+				touch_mode = true
 			_begin()
+		return
+	if event is InputEventScreenTouch or event is InputEventScreenDrag:
+		_touch_input(event)
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		_key((event as InputEventKey).keycode)
 	elif event is InputEventMouseButton and event.pressed:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			var p := mb.position
-			var id := ui.hit(p)
-			if id.begins_with("sl:"):
-				drag_id = id
-				_slide(id, p.x)
-			elif id != "":
-				_click(id)
-			elif state == S.CALIB:
-				_calib_tap()
+			_press(mb.position)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			pick_scroll += 1
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			pick_scroll = maxi(0, pick_scroll - 1)
-	elif event is InputEventMouseButton and not event.pressed and drag_id != "":
-		drag_id = ""
-		Settings.save_cfg()
+	elif event is InputEventMouseButton and not event.pressed:
+		_release()
 	elif event is InputEventMouseMotion and drag_id != "":
 		_slide(drag_id, (event as InputEventMouseMotion).position.x)
 
@@ -517,6 +573,8 @@ func _click_prefixed(id: String) -> void:
 		_event_choice(event_data["opts"][int(id.substr(3))][1])
 	elif id.begins_with("pick:"):
 		_pick_card(int(id.substr(5)))
+	elif id.begins_with("scroll:"):
+		pick_scroll = maxi(0, pick_scroll + int(id.substr(7)))
 
 func _pick_card(i: int) -> void:
 	if i >= run.deck.size():
@@ -597,6 +655,7 @@ func _draw() -> void:
 
 func draw_hud(c: Control) -> void:
 	ui.begin(c, get_process_delta_time())
+	ui.touch = touch_mode
 	match state:
 		S.SPLASH: _draw_splash(c)
 		S.MENU: _draw_menu(c)
@@ -620,8 +679,24 @@ func draw_hud(c: Control) -> void:
 		S.END: _draw_end(c)
 	if deck_view:
 		_draw_deck_overlay(c)
+	if state == S.BATTLE and not paused:
+		_draw_joystick(c)
+	var ws := DisplayServer.window_get_size()
+	if ws.y > ws.x and state != S.SPLASH:
+		c.draw_rect(Rect2(0, 0, W, H), Color(0.03, 0.02, 0.08, 0.95))
+		ui.center(c, "画面を横向きにしてください", 330.0, 44, Color(1, 0.9, 0.5))
+		ui.center(c, "(スマホは横向き+全画面がおすすめ)", 390.0, 22, Color(0.8, 0.8, 0.95))
 	if fade > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, clampf(fade, 0.0, 1.0)))
+
+func _draw_joystick(c: Control) -> void:
+	if joy_id != -1:
+		var off := (joy_pos - joy_origin).limit_length(60.0)
+		c.draw_circle(joy_origin, 60.0, Color(1, 1, 1, 0.08))
+		c.draw_arc(joy_origin, 60.0, 0.0, TAU, 32, Color(1, 1, 1, 0.35), 3.0)
+		c.draw_circle(joy_origin + off, 26.0, Color(1, 1, 1, 0.35))
+	elif touch_mode and battle and not battle.ending:
+		ui.text(c, "画面をドラッグで移動", Vector2(0, 470), 16, Color(1, 1, 1, 0.3), HORIZONTAL_ALIGNMENT_CENTER, W)
 
 func _bg(c: Control, tint := Color(0.07, 0.05, 0.14)) -> void:
 	c.draw_rect(Rect2(0, 0, W, H), tint)
@@ -655,7 +730,7 @@ func _draw_splash(c: Control) -> void:
 	_logo(c, 200.0)
 	_dancers(c, 520.0)
 	var a := 0.5 + 0.5 * sin(t * 4.0)
-	ui.center(c, "クリック または 何かキーを押してスタート", 440.0, 26, Color(1, 0.9, 0.5, 0.4 + 0.6 * a))
+	ui.center(c, "タップ / クリック / キーでスタート", 440.0, 26, Color(1, 0.9, 0.5, 0.4 + 0.6 * a))
 	ui.center(c, "♪ 音が出ます", 475.0, 14, Color(0.7, 0.7, 0.85))
 
 func _draw_menu(c: Control) -> void:
@@ -901,7 +976,9 @@ func _deck_grid(c: Control, clickable: bool) -> void:
 		var rid := "pick:%d" % i if ok else ""
 		ui.mini_card(c, run.deck[i], r, rid)
 	if total_rows > rows_vis:
-		ui.text(c, "マウスホイールでスクロール (%d/%d)" % [pick_scroll + 1, total_rows - rows_vis + 1], Vector2(0, H - 24.0), 14, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.button(c, "scroll:-1", Rect2(W - 80.0, 140.0, 56.0, 56.0), "▲", pick_scroll > 0, Color(0.6, 0.7, 1.0), 24)
+		ui.button(c, "scroll:1", Rect2(W - 80.0, 206.0, 56.0, 56.0), "▼", pick_scroll < total_rows - rows_vis, Color(0.6, 0.7, 1.0), 24)
+		ui.text(c, "マウスホイール / ドラッグ / ▲▼でスクロール (%d/%d)" % [pick_scroll + 1, total_rows - rows_vis + 1], Vector2(0, H - 24.0), 14, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
 
 func _draw_deck_overlay(c: Control) -> void:
 	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.85))
@@ -1036,8 +1113,17 @@ func _debug_screen(sname: String) -> void:
 		_:
 			_start_battle(sname if sname in ["boss", "elite"] else "battle")
 
+var _shot_played := false
+
 func _run_autotest(delta: float) -> void:
 	_autotest_t += delta
+	if _shot_path != "" and state == S.BATTLE and battle and not _shot_played and _autotest_t > 5.6:
+		_shot_played = true
+		for i in 5:
+			var id := battle.deck.hand[i]
+			if id != "" and battle.energy >= int(Cards.def(id)["cost"]):
+				battle.try_play(i)
+				break
 	if _shot_path != "" and _autotest_t > (7.0 if _screen_arg in ["boss", "elite", "battle"] else 1.0) and pending < 0:
 		get_viewport().get_texture().get_image().save_png(_shot_path)
 		print("shot saved")

@@ -10,6 +10,7 @@ var font: Font
 var buttons: Array = []  # {id, rect}
 var mouse := Vector2.ZERO
 var time := 0.0
+var touch := false
 var _hover_id := ""
 
 func begin(c: Control, delta: float) -> void:
@@ -103,7 +104,7 @@ func card(c: Control, id: String, r: Rect2, key: String, usable := true, sel := 
 	c.draw_string(font, rr.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 40.0, 13, nm_col)
 	c.draw_string(font, rr.position + Vector2(10, 56), Cards.TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
 	c.draw_multiline_string(font, rr.position + Vector2(10, 84), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 14, -1, Color(0.9, 0.9, 0.95, dim))
-	if key != "":
+	if key != "" and not touch:
 		c.draw_string(font, rr.position + Vector2(0, rr.size.y - 8), "[" + key + "]", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 14, Color(1, 1, 1, 0.5 * dim))
 	return h
 

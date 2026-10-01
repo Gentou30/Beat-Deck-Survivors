@@ -30,3 +30,5 @@ Hybrid of Vampire Survivors (auto-battle swarm), Slay the Spire (map run, deck, 
 - Templates: only `web_*` zips are installed (from Godot_v4.7.2-stable_export_templates.tpz) in `%APPDATA%\Godot\export_templates\4.7.2.stable`.
 - Export + zip: `./tools/export_web.ps1` (preset "Web" in export_presets.cfg, single-threaded, no COOP/COEP needed). Serve over http (not file://).
 - Web specifics: splash screen requires a click (browser audio policy) before music starts; Quit button hidden via `OS.has_feature("web")`; settings persist in IndexedDB.
+- Touch: mouse emulation from touch is OFF (project.godot); `main.gd:_touch_input` handles taps and a floating joystick (battle arena), multi-touch safe. `ui.touch` hides key hints.
+- GitHub Pages: .github/workflows/deploy-pages.yml builds with Godot + web templates downloaded from the official release and deploys on push to main (repo Settings > Pages > Source = GitHub Actions).

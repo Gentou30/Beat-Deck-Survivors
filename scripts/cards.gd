@@ -38,6 +38,14 @@ const DB := {
 		"tmpl": "【パワー】{k}体撃破ごとにHP1回復。", "p": {"k": 6}, "plus": {"p": {"k": 4}}},
 }
 
+const SHORT := {
+	"pulse": "弾{n}発 各{dmg}", "chain": "{n}体に雷撃 各{dmg}", "nova": "範囲{dmg}+吹き飛ばし",
+	"blades": "剣{n}本 {beats}拍", "bass": "全体に{dmg}", "leech": "範囲{dmg} 吸収最大{max}",
+	"heavy": "貫通ビーム{dmg}", "guard": "シールド+{n}", "mend": "HP+{n}", "surge": "エネルギー+{n}",
+	"frenzy": "与ダメ2倍 {beats}拍", "freeze": "敵を減速 {beats}拍", "echo": "次のカードを2回発動",
+	"resonance": "自動弾+{n} (永続)", "fortress": "4拍ごとシールド+{n}", "aura": "{k}体撃破でHP+1",
+}
+
 const TYPE_JA := {"attack": "アタック", "skill": "スキル", "power": "パワー"}
 
 static func is_upgraded(id: String) -> bool:
@@ -66,6 +74,10 @@ static func def(id: String) -> Dictionary:
 		"exhaust": b.get("exhaust", false) or t == "power",
 		"up": up,
 	}
+
+## One-line effect summary shown when a card is played.
+static func short(id: String) -> String:
+	return String(SHORT[base_id(id)]).format(def(id)["p"])
 
 static func upgrade(id: String) -> String:
 	return id if is_upgraded(id) else id + "+"

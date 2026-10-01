@@ -15,11 +15,20 @@ func setup(cards: Array, hand_size: int) -> void:
 	for i in hand_size:
 		hand.append(draw_one())
 
+func _reshuffle() -> void:
+	draw_pile.append_array(discard_pile)
+	discard_pile.clear()
+	draw_pile.shuffle()
+
+## The card that will be drawn next (reshuffles early if the draw pile is empty).
+func peek_next() -> String:
+	if draw_pile.is_empty():
+		_reshuffle()
+	return draw_pile.back() if not draw_pile.is_empty() else ""
+
 func draw_one() -> String:
 	if draw_pile.is_empty():
-		draw_pile.append_array(discard_pile)
-		discard_pile.clear()
-		draw_pile.shuffle()
+		_reshuffle()
 	if draw_pile.is_empty():
 		return ""
 	return draw_pile.pop_back()

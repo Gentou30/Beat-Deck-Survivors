@@ -1,0 +1,72 @@
+name: Deploy Web build to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot + web export templates
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-web
+
+      - name: Install Godot + web export templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          BASE=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          mkdir -p ~/godot-bin
+          curl -sSL -o godot.zip "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d ~/godot-bin
+          curl -sSL -o templates.tpz "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          T=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p "$T"
+          unzip -oj templates.tpz "templates/web_*" "templates/version.txt" -d "$T"
+          rm -f godot.zip templates.tpz
+
+      - name: Import and export (Web)
+        run: |
+          set -e
+          GODOT=~/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          chmod +x "$GODOT"
+          mkdir -p build/web
+          "$GODOT" --headless --import || true
+          "$GODOT" --headless --export-release "Web" build/web/index.html
+          test -f build/web/index.pck
+          touch build/web/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

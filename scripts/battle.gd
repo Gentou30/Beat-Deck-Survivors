@@ -98,6 +98,13 @@ var beat_pulse := 0.0
 var flash_a := 0.0
 var flash_col := Color.WHITE
 var ending := false
+var touch_dir := Vector2.ZERO
+var cast_name := ""
+var cast_short := ""
+var cast_col := Color.WHITE
+var cast_grade := ""
+var cast_t := 0.0
+var slot_anim: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
 var done := false
 var end_timer := 0.0
 var end_won := false
@@ -360,6 +367,9 @@ func update(delta: float) -> void:
 		q.vel *= 0.98
 	parts = parts.filter(func(q: Part) -> bool: return q.life > 0.0)
 	banner_time = maxf(0.0, banner_time - delta)
+	cast_t = maxf(0.0, cast_t - delta)
+	for i in slot_anim.size():
+		slot_anim[i] = maxf(0.0, slot_anim[i] - delta)
 	shake = maxf(0.0, shake - delta * 28.0)
 	beat_pulse = maxf(0.0, beat_pulse - delta * 4.0)
 	flash_a = maxf(0.0, flash_a - delta * 2.5)
@@ -382,6 +392,8 @@ func update(delta: float) -> void:
 	_update_play(delta)
 
 func move_dir() -> Vector2:
+	if touch_dir.length() > 0.0:
+		return touch_dir
 	return Vector2(
 		float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
 		float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)))
@@ -598,7 +610,13 @@ func try_play(slot: int) -> void:
 	var m := gm * dmg_mult()
 	for i in times:
 		_apply_card(id, m)
+	cast_name = String(d["name"]) + (" ×2" if times == 2 else "")
+	cast_short = Cards.short(id)
+	cast_col = d["color"]
+	cast_grade = grade
+	cast_t = 1.5
 	deck.play(slot, d["exhaust"])
+	slot_anim[slot] = 0.35
 
 func _apply_card(id: String, m: float) -> void:
 	var d: Dictionary = Cards.def(id)
@@ -762,6 +780,8 @@ func draw_world(c: Node2D) -> void:
 		c.draw_arc(player_pos, 32.0 + 3.0 * pulse, 0.0, TAU, 32, Color(1.0, 0.6, 0.2), 2.0)
 	if echo_pending:
 		c.draw_arc(player_pos, 38.0, 0.0, TAU, 6, Color(0.85, 0.7, 1.0), 2.0)
+	_draw_mini_status(c)
+	_draw_cast(c)
 	# particles
 	for q in parts:
 		var k := q.life / q.max_life
@@ -791,6 +811,40 @@ func draw_world(c: Node2D) -> void:
 	_vignette(c, Color(0.4, 0.3, 0.9), 0.12 * pulse)
 	if flash_a > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(flash_col, flash_a * 0.5))
+
+## Tiny HP / shield / energy readout hugging the player so the HUD corner needn't be checked.
+func _draw_mini_status(c: Node2D) -> void:
+	var bw := 48.0
+	var by := player_pos.y + 32.0
+	if by > ARENA_BOTTOM - 4.0:
+		by = player_pos.y - 44.0
+	var bx := player_pos.x - bw / 2.0
+	c.draw_rect(Rect2(bx - 1, by - 1, bw + 2, 7), Color(0, 0, 0, 0.55))
+	var frac := clampf(float(run.hp) / run.max_hp, 0.0, 1.0)
+	var hcol := Color(0.4, 0.9, 0.45) if frac > 0.5 else (Color(0.95, 0.75, 0.3) if frac > 0.25 else Color(0.95, 0.3, 0.3))
+	c.draw_rect(Rect2(bx, by, bw * frac, 5), Color(hcol, 0.9))
+	if shield > 0:
+		c.draw_rect(Rect2(bx, by + 6, bw * minf(1.0, shield / 40.0), 3), Color(0.5, 0.7, 1.0, 0.9))
+	var pw := 7.0
+	var total := max_energy * (pw + 2.0) - 2.0
+	for i in max_energy:
+		var on := i < energy
+		c.draw_rect(Rect2(player_pos.x - total / 2.0 + i * (pw + 2.0), by + 10, pw, 5), Color(1.0, 0.85, 0.3, 0.95) if on else Color(0.3, 0.27, 0.2, 0.7))
+
+## Card name + short effect text above the player after playing a card.
+func _draw_cast(c: Node2D) -> void:
+	if cast_t <= 0.0:
+		return
+	var k := cast_t / 1.5
+	var a := minf(1.0, k * 2.5)
+	var px := clampf(player_pos.x, 150.0, W - 150.0)
+	var py := maxf(130.0, player_pos.y - 100.0 - 12.0 * (1.0 - k))
+	c.draw_rect(Rect2(px - 130, py - 24, 260, 50), Color(0, 0, 0, 0.5 * a))
+	c.draw_rect(Rect2(px - 130, py - 24, 4, 50), Color(cast_col, a))
+	c.draw_string(ui.font, Vector2(px - 120, py - 3), cast_name, HORIZONTAL_ALIGNMENT_LEFT, 170.0, 19, Color(cast_col.lerp(Color.WHITE, 0.35), a))
+	var gcol := Color(1.0, 0.9, 0.3) if cast_grade == "PERFECT" else (Color(0.5, 0.9, 1.0) if cast_grade == "GOOD" else Color(0.9, 0.4, 0.4))
+	c.draw_string(ui.font, Vector2(px + 40, py - 3), cast_grade, HORIZONTAL_ALIGNMENT_RIGHT, 84.0, 13, Color(gcol, a))
+	c.draw_string(ui.font, Vector2(px - 120, py + 17), cast_short, HORIZONTAL_ALIGNMENT_LEFT, 244.0, 13, Color(0.92, 0.92, 1.0, a))
 
 func _vignette(c: Node2D, col: Color, a: float) -> void:
 	if a <= 0.01:
@@ -831,7 +885,7 @@ func draw_hud(c: Control) -> void:
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(10 + i * 30, 128, 26, 26), "relic:%d" % i)
 	# combo / buffs
-	var rx := W - 230.0
+	var rx := W - 310.0
 	if combo > 1:
 		ui.text(c, "コンボ x%d" % combo, Vector2(rx, 40), 28, Color(1.0, 0.9, 0.3) if combo < 10 else Color(1.0, 0.6, 0.2), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
 		var per := 3.0 if run.has_relic("amp") else 2.0
@@ -855,7 +909,7 @@ func draw_hud(c: Control) -> void:
 	for b in buffs:
 		ui.text(c, b[0], Vector2(rx, by), 14, b[1], HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
 		by += 20.0
-	ui.button(c, "pause", Rect2(W - 54, 8, 44, 30), "||", true, Color(0.6, 0.6, 0.8), 18)
+	ui.button(c, "pause", Rect2(W - 74, 8, 64, 46), "||", true, Color(0.6, 0.6, 0.8), 20)
 
 	# rhythm lane
 	var cx := W / 2.0
@@ -900,6 +954,19 @@ func draw_hud(c: Control) -> void:
 		var id := deck.hand[i]
 		if id != "":
 			var d: Dictionary = Cards.def(id)
-			ui.card(c, id, card_rect(i), str(i + 1), energy >= int(d["cost"]), false, "hand:%d" % i)
-	ui.text(c, "山札 %d" % deck.draw_pile.size(), Vector2(20, H - 44), 16, Color(0.8, 0.8, 0.95))
-	ui.text(c, "捨て札 %d" % deck.discard_pile.size(), Vector2(20, H - 20), 16, Color(0.8, 0.8, 0.95))
+			var r := card_rect(i)
+			var an := slot_anim[i] / 0.35
+			if an > 0.0:
+				r.position.y += pow(an, 2.0) * 90.0
+			ui.card(c, id, r, str(i + 1), energy >= int(d["cost"]), an > 0.0, "hand:%d" % i)
+			if an > 0.0:
+				c.draw_rect(r.grow(4.0), Color(1, 1, 1, an * 0.5), false, 3.0)
+	# next card preview
+	var nxt := deck.peek_next()
+	ui.text(c, "次のカード", Vector2(20, H - 156), 14, Color(1.0, 0.95, 0.7))
+	if nxt != "":
+		ui.mini_card(c, nxt, Rect2(20, H - 148, 204, 56))
+	else:
+		ui.text(c, "(なし)", Vector2(20, H - 120), 14, Color(0.7, 0.7, 0.8))
+	ui.text(c, "山札 %d" % deck.draw_pile.size(), Vector2(20, H - 66), 16, Color(0.8, 0.8, 0.95))
+	ui.text(c, "捨て札 %d" % deck.discard_pile.size(), Vector2(20, H - 42), 16, Color(0.8, 0.8, 0.95))
