@@ -15,6 +15,7 @@ const TILE_BOSS := 110
 const TILE_SWORD := 104
 const TILE_FLOOR := 0
 const ENEMY_TILES := [108, 120, 121, 122, 123, 109]  # picked by wave
+const TYPE_JA := {"attack": "アタック", "skill": "スキル"}
 const PERFECT_WINDOW := 0.07
 const GOOD_WINDOW := 0.14
 
@@ -83,6 +84,13 @@ var _shot_path := ""
 var _hud: Control
 var _tex_cache := {}
 
+var _font_res: Font
+
+func _font() -> Font:
+	if _font_res == null:
+		_font_res = load("res://assets/fonts/DotGothic16-Regular.ttf")
+	return _font_res
+
 func _tex(i: int) -> Texture2D:
 	if not _tex_cache.has(i):
 		_tex_cache[i] = load(TILE_DIR % i)
@@ -132,7 +140,7 @@ func _start_wave() -> void:
 	spawning = true
 	boss_alive = false
 	energy = maxi(energy, 3)
-	banner = "WAVE %d" % wave if wave < MAX_WAVE else "FINAL WAVE - BOSS"
+	banner = "WAVE %d" % wave if wave < MAX_WAVE else "最終ウェーブ - ボス"
 	banner_time = 2.5
 	if wave == MAX_WAVE:
 		var b := _make_enemy(_edge_point(), true)
@@ -382,7 +390,7 @@ func try_play(slot: int) -> void:
 	var card: Dictionary = Cards.DB[id]
 	var cost: int = card["cost"]
 	if energy < cost:
-		_text(player_pos + Vector2(0, -40), "NO ENERGY", Color(0.7, 0.7, 0.7))
+		_text(player_pos + Vector2(0, -40), "エネルギー不足", Color(0.7, 0.7, 0.7))
 		return
 	energy -= cost
 	var a := absf(Conductor.beat_offset())
@@ -525,7 +533,7 @@ func _draw() -> void:
 	if frenzy_beats > 0:
 		draw_arc(player_pos + off, 28.0, 0.0, TAU, 32, Color(1.0, 0.6, 0.2), 2.0)
 	# fx
-	var font := ThemeDB.fallback_font
+	var font := _font()
 	for f in fxs:
 		var k := f.life / f.max_life
 		match f.kind:
@@ -539,13 +547,13 @@ func _draw() -> void:
 # ---- drawing: HUD ----------------------------------------------------------
 
 func draw_hud(c: Control) -> void:
-	var f := ThemeDB.fallback_font
+	var f := _font()
 	if state == State.TITLE:
 		_center(c, f, "BEAT DECK SURVIVORS", 200.0, 56, Color(0.9, 0.8, 1.0))
-		_center(c, f, "Survive the swarm. Play cards ON THE BEAT.", 270.0, 24, Color.WHITE)
-		_center(c, f, "Move: WASD / Arrows     Cards: 1-5 or click     Tune timing: [ ]", 330.0, 20, Color(0.8, 0.8, 0.9))
-		_center(c, f, "Perfect = x1.5 power, combo adds damage. Miss = x0.6 and combo reset.", 365.0, 20, Color(0.8, 0.8, 0.9))
-		_center(c, f, "Press ENTER / click to start", 450.0, 28, Color(1.0, 0.9, 0.4))
+		_center(c, f, "群れを生き延びろ。カードは「ビートに合わせて」使え。", 270.0, 24, Color.WHITE)
+		_center(c, f, "移動: WASD / 矢印    カード: 1〜5 / クリック    判定調整: [ ]", 330.0, 20, Color(0.8, 0.8, 0.9))
+		_center(c, f, "PERFECT=威力1.5倍、コンボでダメージ上昇。MISS=0.6倍でコンボ切れ。", 365.0, 20, Color(0.8, 0.8, 0.9))
+		_center(c, f, "ENTER / クリックでスタート", 450.0, 28, Color(1.0, 0.9, 0.4))
 		return
 
 	# top-left stats
@@ -553,18 +561,18 @@ func draw_hud(c: Control) -> void:
 	c.draw_rect(Rect2(20, 20, 220.0 * maxf(0, hp) / max_hp, 18), Color(0.85, 0.25, 0.3))
 	c.draw_string(f, Vector2(26, 34), "HP %d/%d" % [hp, max_hp], HORIZONTAL_ALIGNMENT_LEFT, -1, 14)
 	if shield > 0:
-		c.draw_string(f, Vector2(250, 34), "+%d shield" % shield, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.5, 0.7, 1.0))
+		c.draw_string(f, Vector2(250, 34), "シールド +%d" % shield, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.5, 0.7, 1.0))
 	for i in MAX_ENERGY:
 		var ec := Color(1.0, 0.85, 0.3) if i < energy else Color(0.25, 0.22, 0.15)
 		c.draw_circle(Vector2(32 + i * 28, 62), 10.0, ec)
-	c.draw_string(f, Vector2(20, 96), "Wave %d/%d   Kills %d" % [wave, MAX_WAVE, kills], HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+	c.draw_string(f, Vector2(20, 96), "ウェーブ %d/%d   撃破 %d" % [wave, MAX_WAVE, kills], HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
 	if spawning and wave < MAX_WAVE:
-		c.draw_string(f, Vector2(20, 118), "Time %.0f" % wave_time_left, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+		c.draw_string(f, Vector2(20, 118), "残り %.0f" % wave_time_left, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
 	if combo > 1:
-		c.draw_string(f, Vector2(W - 220, 40), "COMBO x%d" % combo, HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 26, Color(1.0, 0.9, 0.3))
-		c.draw_string(f, Vector2(W - 220, 62), "+%d%% dmg" % int(minf(combo, 20.0) * 2.0), HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 14, Color(1.0, 0.9, 0.6))
+		c.draw_string(f, Vector2(W - 220, 40), "コンボ x%d" % combo, HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 26, Color(1.0, 0.9, 0.3))
+		c.draw_string(f, Vector2(W - 220, 62), "ダメージ +%d%%" % int(minf(combo, 20.0) * 2.0), HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 14, Color(1.0, 0.9, 0.6))
 	if frenzy_beats > 0:
-		c.draw_string(f, Vector2(W - 220, 84), "FRENZY %d" % frenzy_beats, HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 16, Color(1.0, 0.6, 0.2))
+		c.draw_string(f, Vector2(W - 220, 84), "フレンジー %d" % frenzy_beats, HORIZONTAL_ALIGNMENT_RIGHT, 200.0, 16, Color(1.0, 0.6, 0.2))
 
 	# rhythm lane (notes converge on center hit marker)
 	var cx := W / 2.0
@@ -590,29 +598,29 @@ func draw_hud(c: Control) -> void:
 		_draw_hand(c, f)
 	if state == State.REWARD:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
-		_center(c, f, "WAVE %d CLEARED - choose a card" % wave, 130.0, 36, Color(1, 1, 0.8))
+		_center(c, f, "ウェーブ %d クリア - カードを選べ" % wave, 130.0, 36, Color(1, 1, 0.8))
 		for i in reward_options.size():
 			_draw_card(c, f, reward_rect(i), reward_options[i], str(i + 1), true)
 		var rr := rest_rect()
 		c.draw_rect(rr, Color(0.15, 0.3, 0.2))
 		c.draw_rect(rr, Color(0.5, 0.9, 0.6), false, 2.0)
-		c.draw_string(f, rr.position + Vector2(0, 35), "[4] Rest: heal 15 HP", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 22)
+		c.draw_string(f, rr.position + Vector2(0, 35), "[4] 休憩: HP15回復", HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, 22)
 	elif state == State.WON:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
-		_center(c, f, "VICTORY!", 280.0, 72, Color(1, 0.9, 0.4))
-		_center(c, f, "Kills %d   Deck size %d   Press ENTER to play again" % [kills, deck.total_cards()], 350.0, 22, Color.WHITE)
+		_center(c, f, "勝利！", 280.0, 72, Color(1, 0.9, 0.4))
+		_center(c, f, "撃破 %d   デッキ %d枚   ENTERでもう一度" % [kills, deck.total_cards()], 350.0, 22, Color.WHITE)
 	elif state == State.LOST:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
-		_center(c, f, "DEFEATED", 280.0, 72, Color(0.9, 0.3, 0.3))
-		_center(c, f, "Reached wave %d   Kills %d   Press ENTER to retry" % [wave, kills], 350.0, 22, Color.WHITE)
+		_center(c, f, "敗北", 280.0, 72, Color(0.9, 0.3, 0.3))
+		_center(c, f, "到達ウェーブ %d   撃破 %d   ENTERでリトライ" % [wave, kills], 350.0, 22, Color.WHITE)
 
 func _draw_hand(c: Control, f: Font) -> void:
 	for i in HAND_SIZE:
 		var id := deck.hand[i]
 		if id != "":
 			_draw_card(c, f, card_rect(i), id, str(i + 1), energy >= int((Cards.DB[id] as Dictionary)["cost"]))
-	c.draw_string(f, Vector2(20, H - 40), "Draw: %d" % deck.draw_pile.size(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.8, 0.9))
-	c.draw_string(f, Vector2(20, H - 18), "Discard: %d" % deck.discard_pile.size(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.8, 0.9))
+	c.draw_string(f, Vector2(20, H - 40), "山札: %d" % deck.draw_pile.size(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.8, 0.9))
+	c.draw_string(f, Vector2(20, H - 18), "捨て札: %d" % deck.discard_pile.size(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.8, 0.9))
 
 func _draw_card(c: Control, f: Font, r: Rect2, id: String, key: String, usable: bool) -> void:
 	var d: Dictionary = Cards.DB[id]
@@ -623,8 +631,8 @@ func _draw_card(c: Control, f: Font, r: Rect2, id: String, key: String, usable: 
 	c.draw_rect(r, Color(col, dim), false, 2.0)
 	c.draw_circle(r.position + Vector2(18, 18), 13.0, Color(0.15, 0.3, 0.8, dim))
 	c.draw_string(f, r.position + Vector2(8, 25), str(d["cost"]), HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color(1, 1, 1, dim))
-	c.draw_string(f, r.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 16, Color(1, 1, 1, dim))
-	c.draw_string(f, r.position + Vector2(10, 58), String(d["type"]).to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
+	c.draw_string(f, r.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 14, Color(1, 1, 1, dim))
+	c.draw_string(f, r.position + Vector2(10, 58), TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
 	c.draw_multiline_string(f, r.position + Vector2(10, 90), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 20.0, 15, -1, Color(0.9, 0.9, 0.95, dim))
 	c.draw_string(f, r.position + Vector2(0, r.size.y - 8), "[" + key + "]", HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 14, Color(1, 1, 1, 0.5 * dim))
 

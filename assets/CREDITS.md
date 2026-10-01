@@ -1,0 +1,1 @@
+- DotGothic16 font (c) The DotGothic16 Project Authors - SIL Open Font License 1.1 - https://github.com/google/fonts/tree/main/ofl/dotgothic16  (assets/fonts/, license: OFL.txt)

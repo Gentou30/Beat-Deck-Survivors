@@ -16,6 +16,6 @@ Hybrid of Vampire Survivors (auto-battle swarm), Slay the Spire (deck, energy, c
 - `docs/DESIGN.md` design + roadmap.
 
 ## Conventions
-- UI text is English (Godot's default font has no CJK glyphs; add a font asset to localize).
+- UI text is Japanese using DotGothic16 (OFL) loaded in `main.gd:_font()`.
 - Visuals + SFX are Kenney CC0 (see assets/CREDITS.md); music is procedural. New external assets must be CC0/permissive and recorded in `assets/CREDITS.md`.
 - Commit small, after `./tools/test.ps1` passes.
