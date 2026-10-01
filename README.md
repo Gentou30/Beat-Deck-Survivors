@@ -23,11 +23,11 @@ A swarm-survival roguelike where your weapons are a **deck of cards** and every 
 - **2 acts** (10 floors + boss each; Act 2 = a red machine army and the final boss *Maestro* with 3 phases), Endless mode (boss every 10 waves), Daily Run (fixed map + modifier)
 - Boss bullet patterns are locked to the beat grid, and the Drum Mage / Maestro also fire on the track's measured off-beat accents
 - Ascension 0-5, 18 achievements, records
-- 3 CC0 music tracks (BPM-aligned), interactive tutorial, timing calibration, English / Japanese
+- 5 original 4-on-the-floor tracks (sample-exact loops), handclap beat guide + 4-beat countdown, interactive tutorial, timing calibration, English / Japanese
 - Accessibility: reduce flashes/shake, timing assist, adjustable offset; mobile web + gamepad support
 
 ## Dev
 See [CLAUDE.md](CLAUDE.md) (architecture, test/bot/screenshot commands) and [docs/ROADMAP.md](docs/ROADMAP.md).
 Web build: `./tools/export_web.ps1`. GitHub Pages deploys automatically from `main`.
 
-Credits: [assets/CREDITS.md](assets/CREDITS.md) - Kenney (CC0 art/SFX), Joth (CC0 music), DotGothic16 (OFL font).
+Credits: [assets/CREDITS.md](assets/CREDITS.md) - Kenney (CC0 art/SFX), DotGothic16 (OFL font); music and claps are original (tools/gen_music.py).

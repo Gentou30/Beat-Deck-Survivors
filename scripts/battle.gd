@@ -153,6 +153,10 @@ var cur_base := Transform2D.IDENTITY
 var player_vel := Vector2.ZERO
 var facing := 1.0
 var _muffled := false
+var started := false
+var count_n := 0
+var count_t := 0.0
+var intro_banner := ""
 var took_damage := false
 var end_timer := 0.0
 var end_won := false
@@ -217,6 +221,9 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 		_:
 			banner = "バトル開始"
 	banner_time = 2.2
+	intro_banner = banner
+	Conductor.guide = true
+	Conductor.force_clap = true  # 4-beat countdown claps always sound
 	_beat_cb = Callable(self, "on_beat")
 	Conductor.beat.connect(_beat_cb)
 	_step_cb = Callable(self, "on_step")
@@ -224,6 +231,8 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 
 func dispose() -> void:
 	Conductor.set_muffle(false)
+	Conductor.guide = false
+	Conductor.force_clap = false
 	if Conductor.beat.is_connected(_beat_cb):
 		Conductor.beat.disconnect(_beat_cb)
 	if Conductor.step.is_connected(_step_cb):
@@ -532,6 +541,23 @@ func flash(col: Color, a: float) -> void:
 func on_beat(_n: int) -> void:
 	beat_pulse = 1.0
 	beat_count += 1
+	if not started:
+		var bi := beat_count - 1
+		if bi < 4:
+			count_n = 4 - bi
+			count_t = 1.0
+			return
+		started = true
+		Conductor.force_clap = false
+		count_n = 0
+		count_t = 0.7
+		banner = "GO!"
+		banner_time = 0.9
+		flash(Color(1, 1, 1), 0.25)
+		ring(player_pos, 140.0, Color(1.0, 0.9, 0.4), 0.5)
+		burst(player_pos, Color(1.0, 0.9, 0.4), 30, 320.0, 0.6, 5.0)
+		Conductor.play_sfx("big")
+		return
 	for i in 4:
 		_lit[Vector2i(randi() % 20, randi() % 8)] = 1.0
 	if ending:
@@ -738,6 +764,7 @@ func update(delta: float) -> void:
 	parts = parts.filter(func(q: Part) -> bool: return q.life > 0.0)
 	banner_time = maxf(0.0, banner_time - delta)
 	cast_t = maxf(0.0, cast_t - delta)
+	count_t = maxf(0.0, count_t - delta)
 	last_off_t = maxf(0.0, last_off_t - delta)
 	for i in slot_anim.size():
 		slot_anim[i] = maxf(0.0, slot_anim[i] - delta)
@@ -801,6 +828,8 @@ func _update_play(delta: float) -> void:
 	moved_dist += before.distance_to(player_pos)
 	invuln = maxf(0.0, invuln - delta)
 	blade_angle += delta * 4.5
+	if not started:
+		return
 	if tutorial:
 		energy = max_energy
 		_tut_update(delta)
@@ -1150,7 +1179,7 @@ func _draw_tutorial(c: Control) -> void:
 # ---- cards -----------------------------------------------------------------
 
 func try_play(slot: int) -> void:
-	if ending:
+	if ending or not started:
 		return
 	var id := deck.hand[slot]
 	if id == "":
@@ -1716,8 +1745,18 @@ func draw_hud(c: Control) -> void:
 			ui.text(c, nm, Vector2(cx - 220, 78), 12, Color(1, 0.7, 0.9))
 			break
 
+	if run.daily:
+		ui.text(c, Loc.t("★ デイリー: %s") % Loc.t(RunState.MOD_NAMES[run.mod_id]), Vector2(0, 112), 13, Color(1.0, 0.85, 0.3, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+	# 4-3-2-1 countdown
+	if not started and count_n > 0:
+		var k2 := count_t
+		var sc := 1.0 + 0.6 * k2
+		if intro_banner != "":
+			ui.text(c, intro_banner, Vector2(0, 205), 40, Color(1, 0.95, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, str(count_n), Vector2(0, 415 + 25 * (1.0 - k2)), int(110 * sc), Color(1.0, 0.9, 0.4, 0.4 + 0.6 * k2), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, "ビートに合わせて準備！", Vector2(0, 450), 22, Color(1, 1, 1, 0.8), HORIZONTAL_ALIGNMENT_CENTER, W)
 	# banner
-	if banner_time > 0.0 and banner != "":
+	if banner_time > 0.0 and banner != "" and (started or banner == "GO!"):
 		var k := banner_time / 2.2 if kind != "" else 1.0
 		var slide := ease(clampf((1.0 - k) * 6.0, 0.0, 1.0), 0.3)
 		var a := minf(1.0, banner_time * 2.0)

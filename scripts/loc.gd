@@ -9,6 +9,7 @@ static func clear_cache() -> void:
 
 static var _phr: Array = []
 static var _ja_re: RegEx
+static var _fmt_re: RegEx = RegEx.create_from_string("%[-+ 0-9.]*[dsfi]")
 
 ## Japanese -> English when Settings.lang == "en". Exact match first, then phrase substitution
 ## (handles composites like "BOSS: " + name), cached per input string.
@@ -25,7 +26,7 @@ static func t(s: String) -> String:
 	if _ja_re.search(s) != null:
 		if _phr.is_empty():
 			for k in EN.keys():
-				if String(k).length() >= 2 and not ("%" in k) and not ("{" in k):
+				if String(k).length() >= 2 and not _fmt_re.search(k) and not ("{" in k):
 					_phr.append(k)
 			_phr.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
 		for k in _phr:
@@ -436,6 +437,41 @@ const EN := {
 	"マエストロ": "Maestro",
 	"ステージ攻略で第1幕のボスを倒すと解放": "Unlock by defeating the Act 1 boss in Climb mode",
 	"2つの幕(各10階+ボス)を勝ち抜き、最後のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\n難易度(アセンション)で何度も挑める。": "Fight through two acts (10 floors + boss each) and defeat the final boss.\nBattles, elites, rests, shops, events, treasure.\nReplay at higher Ascension levels.",
+	"ビートに合わせて準備！": "Get ready to the beat!",
+	"ハンドクラップ": "Handclap",
+	"リムショット": "Rimshot",
+	"ウッドブロック": "Woodblock",
+	"フィンガースナップ": "Finger snap",
+	"音声・リズム": "Audio & Rhythm",
+	"ゲーム": "Game",
+	"毎拍に鳴らす": "Every beat",
+	"2・4拍のみ鳴らす": "Beats 2 & 4 only",
+	"クラップ音量": "Clap volume",
+	"クラップの音": "Clap sound",
+	"戦闘BGM": "Battle BGM",
+	"クラップは戦闘・チュートリアル・この画面で拍を知らせます。戦闘開始時は4拍のカウントダウン付き。": "Claps mark the beat in battle, the tutorial and this screen. Battles start with a 4-beat countdown.",
+	"▼ 選択中 ▼": "▼ SELECTED ▼",
+	"キャラを決めたら出発！(Enter)": "Pick a character, then GO! (Enter)",
+	"← → / A D で選択   Enter / Space で決定   1〜4 で直接選択": "←/→ or A/D to choose   Enter/Space to confirm   1-4 to pick directly",
+	"+%d G 獲得": "+%d G",
+	"獲得！": "Taken!",
+	"スキップして進む [S]": "Skip & continue [S]",
+	"強化の確認 - 性能比較": "Confirm Upgrade - Before / After",
+	"現在": "Current",
+	"強化後": "Upgraded",
+	"強化する [Enter]": "Upgrade [Enter]",
+	"もどる [Esc]": "Back [Esc]",
+	"コスト": "Cost",
+	"ダメージ": "Damage",
+	"効果量": "Amount",
+	"持続拍数": "Beats",
+	"係数": "Factor",
+	"上限": "Max",
+	"変化: 名前に + が付く": "Changes: gets a + upgrade",
+	"★ デイリー: %s": "★ Daily: %s",
+	"★ 本日のルール ★": "★ Today's rule ★",
+	"今日だけの固定マップ・キャラ・特殊ルール。\n\n★ 本日のルール ★\n": "Fixed map, character and a special rule, today only.\n\n★ Today's rule ★\n",
+	"CC0素材: Kenney  /  音楽・効果音は自作": "CC0 assets: Kenney  /  Music & claps: original",
 	# --- additions (new UI strings) ---
 	"言語 / Language": "Language / 言語",
 	"日本語": "日本語",

@@ -14,6 +14,10 @@ var tutorial_done := false
 var lang := "ja"
 var reduce_flash := false
 var assist := 0  # 0 off, 1 wide, 2 very wide timing windows
+var clap_on := true
+var clap_vol := 0.7
+var clap_type := 0
+var clap_pat := 0  # 0 every beat, 1 beats 2 & 4 only
 var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
 var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0,
 	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1, "act1": 0, "full_clears": 0}
@@ -52,6 +56,10 @@ func load_cfg() -> void:
 	shake = cf.get_value("game", "shake", shake)
 	fullscreen = cf.get_value("game", "fullscreen", fullscreen)
 	bgm = cf.get_value("game", "bgm", bgm)
+	clap_on = cf.get_value("game", "clap_on", clap_on)
+	clap_vol = cf.get_value("game", "clap_vol", clap_vol)
+	clap_type = cf.get_value("game", "clap_type", clap_type)
+	clap_pat = cf.get_value("game", "clap_pat", clap_pat)
 	tutorial_done = cf.get_value("game", "tutorial_done", tutorial_done)
 	lang = cf.get_value("game", "lang", lang)
 	reduce_flash = cf.get_value("game", "reduce_flash", reduce_flash)
@@ -78,6 +86,10 @@ func save_cfg() -> void:
 	cf.set_value("game", "shake", shake)
 	cf.set_value("game", "fullscreen", fullscreen)
 	cf.set_value("game", "bgm", bgm)
+	cf.set_value("game", "clap_on", clap_on)
+	cf.set_value("game", "clap_vol", clap_vol)
+	cf.set_value("game", "clap_type", clap_type)
+	cf.set_value("game", "clap_pat", clap_pat)
 	cf.set_value("game", "tutorial_done", tutorial_done)
 	cf.set_value("game", "lang", lang)
 	cf.set_value("game", "reduce_flash", reduce_flash)

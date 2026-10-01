@@ -35,6 +35,10 @@ var sel_char := 0
 var sel_asc := 0
 var toasts: Array = []
 var sel_long := true
+var settings_tab := 0
+var map_focus := 0
+var reward_picked := -1
+var pick_preview := -1
 var act_clear := false
 var act_banner := 0.0
 var bg_parts: Array = []
@@ -72,6 +76,7 @@ var calib_done := false
 
 var _autotest := false
 var _bot_human := false
+var _last_prog := -1
 var _bot_noise := Vector2.ZERO
 var _bot_noise_t := 0.0
 var _bot_beat := -1
@@ -194,7 +199,7 @@ func _start_battle(kind: String) -> void:
 		diff = (6.0 + maxf(0.0, run.floor_idx) * 0.4) if run.act == 2 else (1.0 + maxf(0.0, run.floor_idx) * 0.5)
 	else:
 		diff = 1.0 + run.wave * 0.35
-	Conductor.choose_for_battle(0 if kind == "tutorial" else Settings.bgm)
+	Conductor.start_battle_track(-1 if kind == "tutorial" else Settings.bgm, kind == "boss")
 	battle = Battle.new()
 	battle.setup(run, kind, diff, ui)
 	if _autotest:
@@ -240,6 +245,7 @@ func _on_battle_done(won: bool, kind: String) -> void:
 	if kind == "elite" or kind == "boss" or randf() < 0.35:
 		reward_potion = Potions.random_id()
 	reward_cards = Cards.random_choices(3)
+	reward_picked = -1
 	if run.mode == "endless":
 		run.wave += 1
 	Conductor.play_sfx("win")
@@ -447,6 +453,8 @@ func _press(p: Vector2) -> void:
 
 func _release() -> void:
 	if drag_id != "":
+		if drag_id == "sl:clap":
+			Conductor.preview_clap()
 		drag_id = ""
 		Settings.save_cfg()
 
@@ -540,6 +548,9 @@ func _pad_nav(dir: Vector2) -> void:
 		var d := 0.05 * dir.x
 		if focus_id == "sl:music":
 			Settings.music_vol = clampf(Settings.music_vol + d, 0.0, 1.0)
+		elif focus_id == "sl:clap":
+			Settings.clap_vol = clampf(Settings.clap_vol + d, 0.0, 1.0)
+			Conductor.preview_clap()
 		else:
 			Settings.sfx_vol = clampf(Settings.sfx_vol + d, 0.0, 1.0)
 		Settings.apply()
@@ -644,6 +655,8 @@ func _slide(id: String, x: float) -> void:
 	var f := clampf((x - SL_X) / SL_W, 0.0, 1.0)
 	if id == "sl:music":
 		Settings.music_vol = f
+	elif id == "sl:clap":
+		Settings.clap_vol = f
 	else:
 		Settings.sfx_vol = f
 	Settings.apply()
@@ -689,11 +702,32 @@ func _key(k: int) -> void:
 		S.REWARD:
 			if k >= KEY_1 and k <= KEY_3:
 				_click("rw:%d" % (k - KEY_1))
-			elif k == KEY_SPACE or k == KEY_S:
+			elif k == KEY_SPACE or k == KEY_S or k == KEY_ENTER:
 				_click("skip")
 		S.PICK:
-			if k == KEY_ESCAPE and pick_mode != "remove_free":
+			if pick_preview >= 0:
+				if k == KEY_ENTER or k == KEY_SPACE or k == KEY_Y:
+					_click("up_ok")
+				elif k == KEY_ESCAPE or k == KEY_BACKSPACE:
+					_click("up_cancel")
+			elif k == KEY_ESCAPE and pick_mode != "remove_free":
 				_click("back")
+		S.MAP:
+			var av := _map_avail()
+			if av.is_empty():
+				return
+			if k == KEY_LEFT or k == KEY_A:
+				map_focus = (map_focus + av.size() - 1) % av.size()
+				Conductor.play_sfx("tick")
+			elif k == KEY_RIGHT or k == KEY_D:
+				map_focus = (map_focus + 1) % av.size()
+				Conductor.play_sfx("tick")
+			elif k == KEY_ENTER or k == KEY_SPACE:
+				Conductor.play_sfx("select")
+				_enter_node(av[clampi(map_focus, 0, av.size() - 1)])
+			elif k >= KEY_1 and k <= KEY_6 and (k - KEY_1) < av.size():
+				Conductor.play_sfx("select")
+				_enter_node(av[k - KEY_1])
 		S.END:
 			if k == KEY_ENTER:
 				_click("menu")
@@ -782,12 +816,29 @@ func _click(id: String) -> void:
 		"off+":
 			Settings.offset_ms = mini(200, Settings.offset_ms + 5)
 		"bgm-", "bgm+":
-			var n: int = Conductor.TRACKS.size() + 1  # -1 (random) + each track
+			var bt := Conductor.battle_tracks()
+			var n: int = bt.size() + 1  # -1 (random) + each battle track
 			var cur: int = Settings.bgm + 1
 			cur = (cur + (1 if id == "bgm+" else n - 1)) % n
 			Settings.bgm = cur - 1
-			if Settings.bgm >= 0:
-				Conductor.set_track(Settings.bgm)  # preview
+			if Settings.bgm >= 0 and settings_return != S.BATTLE:
+				Conductor.set_track(bt[Settings.bgm])  # preview
+			Settings.save_cfg()
+		"tab:audio":
+			settings_tab = 0
+		"tab:game":
+			settings_tab = 1
+		"clap":
+			Settings.clap_on = not Settings.clap_on
+			Settings.save_cfg()
+			Conductor.preview_clap()
+		"clap-", "clap+":
+			var nt: int = Conductor.CLAP_TYPES.size()
+			Settings.clap_type = (Settings.clap_type + (1 if id == "clap+" else nt - 1)) % nt
+			Settings.save_cfg()
+			Conductor.preview_clap()
+		"pat":
+			Settings.clap_pat = 1 - Settings.clap_pat
 			Settings.save_cfg()
 		"shake":
 			Settings.shake = not Settings.shake
@@ -815,6 +866,14 @@ func _click(id: String) -> void:
 			calib_done = false
 		"skip":
 			proceed()
+		"up_ok":
+			if pick_preview >= 0 and pick_preview < run.deck.size():
+				run.deck[pick_preview] = Cards.upgrade(run.deck[pick_preview])
+				pick_preview = -1
+				Conductor.play_sfx("win")
+				proceed()
+		"up_cancel":
+			pick_preview = -1
 		"relic_take":
 			run.add_relic(reward_relic)
 			reward_relic = ""
@@ -847,9 +906,12 @@ func _click(id: String) -> void:
 
 func _click_prefixed(id: String) -> void:
 	if id.begins_with("rw:"):
+		if reward_picked >= 0:
+			return
 		var i := int(id.substr(3))
 		run.deck.append(reward_cards[i])
-		proceed()
+		reward_picked = i
+		Conductor.play_sfx("win")
 	elif id.begins_with("node:"):
 		_enter_node(int(id.substr(5)))
 	elif id.begins_with("char:"):
@@ -890,8 +952,8 @@ func _pick_card(i: int) -> void:
 		"upgrade":
 			if Cards.is_upgraded(run.deck[i]):
 				return
-			run.deck[i] = Cards.upgrade(run.deck[i])
-			proceed()
+			pick_preview = i
+			Conductor.play_sfx("open")
 		"remove":
 			var cost := 50 + 25 * shop_removed
 			if run.gold < cost or run.deck.size() <= 5:
@@ -953,6 +1015,13 @@ func _process(delta: float) -> void:
 
 func _on_enter(s: S) -> void:
 	focus_id = ""
+	if s != S.BATTLE and s != S.SETTINGS and s != S.CALIB and s != S.RECORDS and s != S.SPLASH:
+		Conductor.play_menu()
+	Conductor.guide = s == S.SETTINGS or s == S.CALIB or s == S.BATTLE
+	if s == S.MAP:
+		map_focus = _map_avail().size() / 2
+	if s == S.PICK:
+		pick_preview = -1
 	if s == S.BATTLE and battle == null:
 		state = S.MENU
 	if s == S.MENU:
@@ -1069,8 +1138,8 @@ func _draw_menu(c: Control) -> void:
 	_dancers(c, 595.0)
 	var st: Dictionary = Settings.stats
 	ui.center(c, Loc.t("プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d") % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 678.0, 14, Color(0.7, 0.7, 0.85))
-	ui.text(c, "CC0素材: Kenney / Joth", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
-	ui.text(c, "♪ %s - Joth (CC0)" % Conductor.TRACKS[Conductor.track_idx]["name"], Vector2(0, H - 12), 11, Color(0.6, 0.6, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 16.0)
+	ui.text(c, "CC0素材: Kenney  /  音楽・効果音は自作", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
+	ui.text(c, "♪ %s" % Conductor.TRACKS[Conductor.track_idx]["name"], Vector2(0, H - 12), 11, Color(0.6, 0.6, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 16.0)
 
 func _draw_mode(c: Control) -> void:
 	_bg(c)
@@ -1083,7 +1152,7 @@ func _draw_mode(c: Control) -> void:
 			Loc.t("クリア %d回 / 最高 %d階") % [Settings.stats["wins"], Settings.stats["best_floor"]]],
 		["mode:endless", "エンドレス", "ウェーブが延々と続くサバイバル。\n勝ち抜くごとにカード報酬。\n10ウェーブごとにボスが出現！", Color(0.5, 0.8, 1.0), 108,
 			Loc.t("最高 %dウェーブ") % Settings.stats["endless_best"]],
-		["mode:daily", "デイリーラン", "今日だけの固定マップ・キャラ・特殊ルール。\n本日のルール:\n" + RunState.MOD_NAMES[dmod], Color(1.0, 0.85, 0.3), 86,
+		["mode:daily", "デイリーラン", "今日だけの固定マップ・キャラ・特殊ルール。\n\n★ 本日のルール ★\n" + RunState.MOD_NAMES[dmod], Color(1.0, 0.85, 0.3), 86,
 			(Loc.t("今日の記録: %d階") % (int(Settings.stats["daily_best"]) + 1)) if (Settings.stats["daily_day"] == day and Settings.stats["daily_best"] >= 0) else "今日は未挑戦"],
 	]
 	for i in 3:
@@ -1115,7 +1184,14 @@ func _draw_char(c: Control) -> void:
 		var sel := i == sel_char
 		ui.button(c, "char:%d" % i, r, "", ok, col)
 		if sel:
-			c.draw_rect(r.grow(5.0), Color(col, 0.5 + 0.4 * menu_pulse), false, 4.0)
+			var gp := 0.5 + 0.5 * sin(t * 5.0)
+			c.draw_rect(r, Color(col.r, col.g, col.b, 0.16 + 0.1 * gp))
+			c.draw_rect(r.grow(10.0), Color(col, 0.18 + 0.14 * gp))
+			c.draw_rect(r.grow(7.0), Color(1.0, 0.95, 0.6, 0.65 + 0.35 * gp), false, 6.0)
+			c.draw_rect(r.grow(2.0), Color(1, 1, 1, 0.9), false, 3.0)
+			ui.text(c, "▼ 選択中 ▼", Vector2(r.position.x, r.position.y - 16.0 - 4.0 * gp), 17, Color(1.0, 0.95, 0.5), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		elif ok:
+			c.draw_rect(r, Color(0, 0, 0, 0.38))
 		var bob := absf(sin(t * 4.0 + i)) * (14.0 if sel else 3.0)
 		var sp := Rect2(r.position.x + r.size.x / 2.0 - 48.0, r.position.y + 20.0 - bob, 96, 96)
 		c.draw_texture_rect(tex(int(cd["tile"])), sp, false, Color.WHITE if ok else Color(0, 0, 0, 0.8))
@@ -1145,7 +1221,15 @@ func _draw_char(c: Control) -> void:
 	if sel_mode == "run":
 		ui.button(c, "len", Rect2(W - 330.0, H - 82.0, 290.0, 48.0), "長さ: 2幕(フル)" if sel_long else "長さ: 1幕(ショート)", true, Color(0.9, 0.7, 0.3), 17)
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
-	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", Characters.ORDER[sel_char] in unl, Color(1.0, 0.8, 0.35), 30)
+	var gp2 := 0.5 + 0.5 * sin(t * 6.0)
+	var go_ok: bool = Characters.ORDER[sel_char] in unl
+	if go_ok:
+		c.draw_rect(Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0).grow(6.0 + 6.0 * gp2), Color(1.0, 0.85, 0.3, 0.25 + 0.25 * gp2))
+		c.draw_rect(Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0).grow(4.0 + 3.0 * gp2), Color(1.0, 0.95, 0.6, 0.6 + 0.4 * gp2), false, 4.0)
+		ui.text(c, "▶", Vector2(W / 2.0 - 215.0 - 8.0 * gp2, H - 50.0), 34, Color(1.0, 0.9, 0.4))
+		ui.text(c, "◀", Vector2(W / 2.0 + 180.0 + 8.0 * gp2, H - 50.0), 34, Color(1.0, 0.9, 0.4))
+		ui.text(c, "キャラを決めたら出発！(Enter)", Vector2(0, H - 102.0 - 4.0 * gp2), 15, Color(1.0, 0.95, 0.6), HORIZONTAL_ALIGNMENT_CENTER, W)
+	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", go_ok, Color(1.0, 0.8, 0.35), 30)
 
 func _draw_records(c: Control) -> void:
 	_bg(c)
@@ -1190,38 +1274,54 @@ func _toggle_btn(c: Control, id: String, r: Rect2, label: String, on: bool, valu
 	var txt := value if value != "" else ("ON" if on else "OFF")
 	ui.button(c, id, r, "%s:  %s" % [Loc.t(label), Loc.t(txt)], true, Color(0.5, 0.9, 0.6) if on else Color(0.6, 0.6, 0.75), 18)
 
+func _arrow_row(c: Control, id_minus: String, id_plus: String, y: float, label: String, value: String) -> void:
+	ui.text(c, label, Vector2(290.0, y + 26.0), 20, Color.WHITE)
+	ui.button(c, id_minus, Rect2(SL_X, y, 56.0, 36.0), "◀", true, Color(0.6, 0.6, 0.9), 20)
+	ui.text(c, value, Vector2(SL_X + 60.0, y + 26.0), 17, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
+	ui.button(c, id_plus, Rect2(SL_X + 364.0, y, 56.0, 36.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
+
 func _draw_settings(c: Control) -> void:
 	_bg(c)
-	ui.center(c, "設定", 74.0, 40, Color(1, 0.9, 0.6))
+	ui.center(c, "設定", 66.0, 38, Color(1, 0.9, 0.6))
+	ui.button(c, "tab:audio", Rect2(W / 2.0 - 250.0, 82.0, 240.0, 40.0), "音声・リズム", true, Color(1.0, 0.8, 0.35) if settings_tab == 0 else Color(0.55, 0.5, 0.95), 18)
+	ui.button(c, "tab:game", Rect2(W / 2.0 + 10.0, 82.0, 240.0, 40.0), "ゲーム", true, Color(1.0, 0.8, 0.35) if settings_tab == 1 else Color(0.55, 0.5, 0.95), 18)
 	var x := 290.0
-	ui.text(c, "音楽音量", Vector2(x, 150), 20, Color.WHITE)
-	ui.slider(c, "sl:music", Rect2(SL_X, 136.0, SL_W, 16.0), Settings.music_vol)
-	ui.text(c, "%d%%" % int(Settings.music_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 152), 18, Color.WHITE)
-	ui.text(c, "効果音量", Vector2(x, 200), 20, Color.WHITE)
-	ui.slider(c, "sl:sfx", Rect2(SL_X, 186.0, SL_W, 16.0), Settings.sfx_vol)
-	ui.text(c, "%d%%" % int(Settings.sfx_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 202), 18, Color.WHITE)
-	ui.text(c, "判定オフセット", Vector2(x, 262), 20, Color.WHITE)
-	ui.button(c, "off-", Rect2(SL_X, 238.0, 56.0, 36.0), "－", true, Color(0.6, 0.6, 0.9), 22)
-	ui.text(c, "%+d ms" % Settings.offset_ms, Vector2(SL_X + 60.0, 264), 20, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 130.0)
-	ui.button(c, "off+", Rect2(SL_X + 200.0, 238.0, 56.0, 36.0), "＋", true, Color(0.6, 0.6, 0.9), 22)
-	ui.button(c, "calib", Rect2(SL_X + 270.0, 238.0, 220.0, 36.0), "自動キャリブレーション", true, Color(0.9, 0.7, 0.3), 15)
-	ui.text(c, "BGM", Vector2(x, 322), 20, Color.WHITE)
-	ui.button(c, "bgm-", Rect2(SL_X, 298.0, 56.0, 36.0), "◀", true, Color(0.6, 0.6, 0.9), 20)
-	var bname := "ランダム (戦闘ごと)" if Settings.bgm < 0 else "%s  (%d BPM)" % [Conductor.TRACKS[Settings.bgm]["name"], int(Conductor.TRACKS[Settings.bgm]["bpm"])]
-	ui.text(c, bname, Vector2(SL_X + 60.0, 324), 17, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
-	ui.button(c, "bgm+", Rect2(SL_X + 364.0, 298.0, 56.0, 36.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
-	ui.text(c, "押すのが遅れる/早いと感じたら調整。ずれが大きい時はキャリブレーションが便利です。", Vector2(0, 372), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
-	_toggle_btn(c, "shake", Rect2(290, 400, 340, 44), "画面揺れ", Settings.shake)
-	_toggle_btn(c, "flash", Rect2(650, 400, 340, 44), "フラッシュ軽減", Settings.reduce_flash)
-	_toggle_btn(c, "fullscreen", Rect2(290, 458, 340, 44), "フルスクリーン", Settings.fullscreen)
-	var al := ["オフ", "広い", "とても広い"]
-	_toggle_btn(c, "assist", Rect2(650, 458, 340, 44), "判定アシスト", Settings.assist > 0, al[Settings.assist])
-	ui.button(c, "lang", Rect2(290, 516, 700, 44), "言語 / Language:  " + ("日本語" if Settings.lang == "ja" else "English"), true, Color(1.0, 0.8, 0.35), 18)
-	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 610.0, 240.0, 52.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
-	var cx := 1100.0
-	c.draw_circle(Vector2(cx, 220), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
-	c.draw_arc(Vector2(cx, 220), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)
-	ui.text(c, "ビート", Vector2(cx - 50.0, 280), 16, Color(0.8, 0.8, 0.95), HORIZONTAL_ALIGNMENT_CENTER, 100.0)
+	if settings_tab == 0:
+		ui.text(c, "音楽音量", Vector2(x, 170), 20, Color.WHITE)
+		ui.slider(c, "sl:music", Rect2(SL_X, 156.0, SL_W, 16.0), Settings.music_vol)
+		ui.text(c, "%d%%" % int(Settings.music_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 172), 18, Color.WHITE)
+		ui.text(c, "効果音量", Vector2(x, 218), 20, Color.WHITE)
+		ui.slider(c, "sl:sfx", Rect2(SL_X, 204.0, SL_W, 16.0), Settings.sfx_vol)
+		ui.text(c, "%d%%" % int(Settings.sfx_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 220), 18, Color.WHITE)
+		ui.text(c, "ハンドクラップ", Vector2(x, 282), 20, Color.WHITE)
+		ui.button(c, "clap", Rect2(SL_X, 256.0, 130.0, 36.0), "ON" if Settings.clap_on else "OFF", true, Color(0.5, 0.9, 0.6) if Settings.clap_on else Color(0.6, 0.6, 0.7), 18)
+		ui.button(c, "pat", Rect2(SL_X + 150.0, 256.0, 270.0, 36.0), "毎拍に鳴らす" if Settings.clap_pat == 0 else "2・4拍のみ鳴らす", true, Color(0.6, 0.7, 1.0), 16)
+		ui.text(c, "クラップ音量", Vector2(x, 332), 20, Color.WHITE)
+		ui.slider(c, "sl:clap", Rect2(SL_X, 318.0, SL_W, 16.0), Settings.clap_vol, Color(1.0, 0.8, 0.35))
+		ui.text(c, "%d%%" % int(Settings.clap_vol * 100.0), Vector2(SL_X + SL_W + 20.0, 334), 18, Color.WHITE)
+		_arrow_row(c, "clap-", "clap+", 358.0, "クラップの音", Conductor.CLAP_NAMES[Settings.clap_type])
+		var bt := Conductor.battle_tracks()
+		var bname := "ランダム (戦闘ごと)" if Settings.bgm < 0 else "%s  (%d BPM)" % [Conductor.TRACKS[bt[Settings.bgm]]["name"], int(Conductor.TRACKS[bt[Settings.bgm]]["bpm"])]
+		_arrow_row(c, "bgm-", "bgm+", 412.0, "戦闘BGM", bname)
+		ui.text(c, "判定オフセット", Vector2(x, 494), 20, Color.WHITE)
+		ui.button(c, "off-", Rect2(SL_X, 468.0, 56.0, 36.0), "－", true, Color(0.6, 0.6, 0.9), 22)
+		ui.text(c, "%+d ms" % Settings.offset_ms, Vector2(SL_X + 60.0, 494), 20, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 130.0)
+		ui.button(c, "off+", Rect2(SL_X + 200.0, 468.0, 56.0, 36.0), "＋", true, Color(0.6, 0.6, 0.9), 22)
+		ui.button(c, "calib", Rect2(SL_X + 270.0, 468.0, 220.0, 36.0), "自動キャリブレーション", true, Color(0.9, 0.7, 0.3), 15)
+		ui.text(c, "クラップは戦闘・チュートリアル・この画面で拍を知らせます。戦闘開始時は4拍のカウントダウン付き。", Vector2(0, 540), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, "押すのが遅れる/早いと感じたら調整。ずれが大きい時はキャリブレーションが便利です。", Vector2(0, 562), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+	else:
+		_toggle_btn(c, "shake", Rect2(290, 190, 340, 44), "画面揺れ", Settings.shake)
+		_toggle_btn(c, "flash", Rect2(650, 190, 340, 44), "フラッシュ軽減", Settings.reduce_flash)
+		_toggle_btn(c, "fullscreen", Rect2(290, 250, 340, 44), "フルスクリーン", Settings.fullscreen)
+		var al := ["オフ", "広い", "とても広い"]
+		_toggle_btn(c, "assist", Rect2(650, 250, 340, 44), "判定アシスト", Settings.assist > 0, al[Settings.assist])
+		ui.button(c, "lang", Rect2(290, 320, 700, 44), "言語 / Language:  " + ("日本語" if Settings.lang == "ja" else "English"), true, Color(1.0, 0.8, 0.35), 18)
+	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 620.0, 240.0, 48.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
+	var cx := 1110.0
+	c.draw_circle(Vector2(cx, 230), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
+	c.draw_arc(Vector2(cx, 230), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)
+	ui.text(c, "ビート", Vector2(cx - 50.0, 290), 16, Color(0.8, 0.8, 0.95), HORIZONTAL_ALIGNMENT_CENTER, 100.0)
 
 func _draw_calib(c: Control) -> void:
 	_bg(c)
@@ -1254,6 +1354,9 @@ func _run_bar(c: Control, show_deck := true) -> void:
 	ui.text(c, fl, Vector2(150, 46), 15, Color(0.85, 0.85, 1.0))
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(300 + i * 34, 12, 30, 30), "relic:%d" % i)
+	if run.daily:
+		var dt := Loc.t("★ デイリー: %s") % Loc.t(RunState.MOD_NAMES[run.mod_id])
+		ui.text(c, dt, Vector2(0, 47), 14, Color(1.0, 0.85, 0.3), HORIZONTAL_ALIGNMENT_CENTER, W)
 	for i in run.potion_slots():
 		var pr := Rect2(W - 206.0 - (run.potion_slots() - i) * 40.0, 10, 34, 34)
 		if i < run.potions.size():
@@ -1278,6 +1381,21 @@ func _relic_tips(c: Control) -> void:
 		if ui.is_hover("relic:%d" % i):
 			var d: Dictionary = Relics.DB[run.relics[i]]
 			ui.tooltip(c, d["name"], d["desc"], Vector2(ui.mouse.x, ui.mouse.y))
+
+## Available next nodes, ordered left to right.
+func _map_avail() -> Array:
+	var nf := run.floor_idx + 1
+	var av: Array = []
+	if nf > MapGen.FLOORS:
+		return av
+	if run.floor_idx == -1:
+		for j in run.map[0].size():
+			av.append(j)
+	else:
+		av = (run.map[run.floor_idx][run.node_idx]["next"] as Array).duplicate()
+	var row: Array = run.map[nf]
+	av.sort_custom(func(a: int, b: int) -> bool: return float(row[a]["col"]) < float(row[b]["col"]))
+	return av
 
 func _draw_map(c: Control) -> void:
 	_bg(c, Color(0.06, 0.05, 0.12))
@@ -1309,6 +1427,12 @@ func _draw_map(c: Control) -> void:
 			if can:
 				ui.button(c, "node:%d" % j, Rect2(p - Vector2(rad + 6, rad + 6), Vector2((rad + 6) * 2.0, (rad + 6) * 2.0)), "", true, col)
 				c.draw_arc(p, rad + 6.0 + 3.0 * sin(t * 6.0), 0.0, TAU, 32, Color(1, 1, 0.7, 0.9), 3.0)
+				var order: int = _map_avail().find(j)
+				if order == map_focus:
+					c.draw_arc(p, rad + 12.0, 0.0, TAU, 32, Color(1, 1, 1, 0.95), 4.0)
+					ui.text(c, "▼", Vector2(p.x - 20.0, p.y - rad - 16.0 - 4.0 * sin(t * 8.0)), 26, Color(1, 0.95, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 40.0)
+				if not touch_mode:
+					ui.text(c, "[%d]" % (order + 1), Vector2(p.x - 20.0, p.y + rad + 20.0), 13, Color(1, 1, 0.8), HORIZONTAL_ALIGNMENT_CENTER, 40.0)
 			c.draw_circle(p, rad, Color(col.r * 0.4, col.g * 0.4, col.b * 0.4, dim))
 			c.draw_arc(p, rad, 0.0, TAU, 32, Color(col, dim), 3.0)
 			ui.text(c, NODE_GLYPH[node["type"]], p + Vector2(-rad, 7.0), int(rad * 0.95), Color(1, 1, 1, dim), HORIZONTAL_ALIGNMENT_CENTER, rad * 2.0)
@@ -1320,6 +1444,8 @@ func _draw_map(c: Control) -> void:
 		ui.text(c, NODE_NAME[k], Vector2(56, ly + 5.0), 14, Color(0.85, 0.85, 0.95))
 		ly += 30.0
 	ui.center(c, "進む場所を選べ", 82.0, 18, Color(1, 0.95, 0.7))
+	if not touch_mode:
+		ui.center(c, "← → / A D で選択   Enter / Space で決定   1〜4 で直接選択", H - 18.0, 14, Color(0.9, 0.9, 1.0, 0.8))
 	if act_banner > 0.0:
 		var ab := minf(1.0, act_banner)
 		c.draw_rect(Rect2(0, 250, W, 120), Color(0, 0, 0, 0.6 * ab))
@@ -1334,9 +1460,17 @@ func _draw_reward(c: Control) -> void:
 	_bg(c)
 	_run_bar(c)
 	ui.center(c, "勝利！", 110.0, 52, Color(1, 0.9, 0.4))
-	ui.center(c, Loc.t("+%d G 獲得  /  カードを1枚選ぼう") % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
+	ui.center(c, Loc.t("+%d G 獲得  /  カードを1枚選ぼう") % reward_gold if reward_picked < 0 else Loc.t("+%d G 獲得") % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
 	for i in reward_cards.size():
-		ui.card(c, reward_cards[i], Rect2(W / 2.0 - 255.0 + i * 180.0, 200.0, 160.0, 250.0), str(i + 1), true, false, "rw:%d" % i)
+		var rr := Rect2(W / 2.0 - 255.0 + i * 180.0, 200.0, 160.0, 250.0)
+		if reward_picked < 0:
+			ui.card(c, reward_cards[i], rr, str(i + 1), true, false, "rw:%d" % i)
+		elif i == reward_picked:
+			ui.card(c, reward_cards[i], rr, "", true, true)
+			c.draw_rect(rr.grow(5.0), Color(1, 0.95, 0.4, 0.6 + 0.4 * sin(t * 6.0)), false, 4.0)
+			ui.text(c, "獲得！", Vector2(rr.position.x, rr.position.y - 8.0), 20, Color(1, 0.95, 0.4), HORIZONTAL_ALIGNMENT_CENTER, rr.size.x)
+		else:
+			ui.card(c, reward_cards[i], rr, "", false, false)
 	if reward_relic != "":
 		var d: Dictionary = Relics.DB[reward_relic]
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 485.0, 520.0, 56.0), Color(0.1, 0.08, 0.04, 0.95), Color(1, 0.85, 0.4))
@@ -1348,7 +1482,12 @@ func _draw_reward(c: Control) -> void:
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 550.0, 520.0, 50.0), Color(0.05, 0.08, 0.1, 0.95), pd["color"])
 		ui.text(c, Loc.t("ポーション: %s - %s") % [pd["name"], pd["desc"]], Vector2(W / 2.0 - 250.0, 581.0), 15, Color(0.95, 1, 0.95))
 		ui.button(c, "potion_take", Rect2(W / 2.0 + 280.0, 550.0, 110.0, 50.0), "満杯" if full else "受け取る", not full, pd["color"], 18)
-	ui.button(c, "skip", Rect2(W / 2.0 - 110.0, 630.0, 220.0, 48.0), "進む [S]", true, Color(0.6, 0.6, 0.8), 20)
+	if reward_picked >= 0 or reward_cards.is_empty():
+		var gp3 := 0.5 + 0.5 * sin(t * 6.0)
+		c.draw_rect(Rect2(W / 2.0 - 120.0, 626.0, 240.0, 54.0).grow(3.0 + 3.0 * gp3), Color(0.6, 1.0, 0.7, 0.5 + 0.4 * gp3), false, 3.0)
+		ui.button(c, "skip", Rect2(W / 2.0 - 120.0, 626.0, 240.0, 54.0), "進む [S]", true, Color(0.5, 0.9, 0.6), 22)
+	else:
+		ui.button(c, "skip", Rect2(W / 2.0 - 120.0, 630.0, 240.0, 48.0), "スキップして進む [S]", true, Color(0.6, 0.6, 0.8), 18)
 	_relic_tips(c)
 
 func _draw_rest(c: Control) -> void:
@@ -1378,9 +1517,47 @@ func _draw_pick(c: Control) -> void:
 	elif pick_mode == "remove_free":
 		title = "削除するカードを選ぶ (無料)"
 	ui.center(c, title, 92.0, 30, Color(1, 0.9, 0.6))
-	_deck_grid(c, true)
-	if pick_mode != "remove_free":
+	_deck_grid(c, pick_preview < 0)
+	if pick_mode != "remove_free" and pick_preview < 0:
 		ui.button(c, "back", Rect2(40, H - 70, 160, 48), "やめる", true, Color(0.6, 0.6, 0.8), 20)
+	if pick_preview >= 0:
+		_draw_upgrade_preview(c)
+
+const PARAM_LABEL := {"dmg": "ダメージ", "n": "効果量", "beats": "持続拍数", "k": "係数", "max": "上限"}
+
+func _draw_upgrade_preview(c: Control) -> void:
+	var id: String = run.deck[pick_preview]
+	var up_id := Cards.upgrade(id)
+	var before: Dictionary = Cards.def(id)
+	var after: Dictionary = Cards.def(up_id)
+	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.82))
+	ui.center(c, "強化の確認 - 性能比較", 90.0, 34, Color(1, 0.9, 0.6))
+	var lx := W / 2.0 - 380.0
+	var rx := W / 2.0 + 140.0
+	ui.text(c, "現在", Vector2(lx, 150.0), 20, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, 240.0)
+	ui.text(c, "強化後", Vector2(rx, 150.0), 20, Color(0.6, 1.0, 0.6), HORIZONTAL_ALIGNMENT_CENTER, 240.0)
+	ui.card(c, id, Rect2(lx, 165.0, 240.0, 300.0), "", true, false)
+	ui.card(c, up_id, Rect2(rx, 165.0, 240.0, 300.0), "", true, true)
+	c.draw_rect(Rect2(rx, 165.0, 240.0, 300.0).grow(5.0), Color(0.5, 1.0, 0.6, 0.6 + 0.4 * sin(t * 6.0)), false, 4.0)
+	ui.text(c, "▶", Vector2(W / 2.0 - 30.0, 330.0), 60, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 60.0)
+	# stat diff list
+	var y := 490.0
+	var lines: Array = []
+	if int(before["cost"]) != int(after["cost"]):
+		lines.append([Loc.t("コスト") + ":  %d  ->  %d" % [int(before["cost"]), int(after["cost"])], int(after["cost"]) < int(before["cost"])])
+	var bp: Dictionary = before["p"]
+	var ap: Dictionary = after["p"]
+	for key in ap:
+		var bv = bp.get(key, 0)
+		if bv != ap[key]:
+			lines.append([Loc.t(PARAM_LABEL.get(key, key)) + ":  %s  ->  %s" % [str(bv), str(ap[key])], true])
+	if lines.is_empty():
+		lines.append([Loc.t("変化: 名前に + が付く"), true])
+	for ln in lines:
+		ui.text(c, ln[0], Vector2(0, y), 20, Color(0.6, 1.0, 0.65) if ln[1] else Color(1, 0.7, 0.6), HORIZONTAL_ALIGNMENT_CENTER, W)
+		y += 28.0
+	ui.button(c, "up_ok", Rect2(W / 2.0 - 280.0, 628.0, 260.0, 54.0), "強化する [Enter]", true, Color(0.5, 0.9, 0.6), 22)
+	ui.button(c, "up_cancel", Rect2(W / 2.0 + 20.0, 628.0, 260.0, 54.0), "もどる [Esc]", true, Color(0.6, 0.6, 0.8), 22)
 
 func _deck_grid(c: Control, clickable: bool) -> void:
 	var cols := 4
@@ -1559,6 +1736,15 @@ func _debug_screen(sname: String) -> void:
 			state = S.EVENT
 		"rest": state = S.REST
 		"pick": state = S.PICK
+		"upgrade":
+			pick_mode = "upgrade"
+			pick_return = S.REST
+			state = S.PICK
+			pick_preview = 0
+		"daily":
+			run.daily = true
+			run.mod_id = 1
+			state = S.MAP
 		"tutorial": start_tutorial()
 		"end":
 			end_won = true
@@ -1581,6 +1767,9 @@ var _shot_played := false
 
 func _run_autotest(delta: float) -> void:
 	_autotest_t += delta
+	if _autotest and int(_autotest_t) % 40 == 0 and int(_autotest_t) != _last_prog:
+		_last_prog = int(_autotest_t)
+		print("AUTOPROGRESS t=%d state=%s act=%d wave=%d floor=%d hp=%d kills=%d" % [_last_prog, S.keys()[state], run.act, run.wave, run.floor_idx, run.hp, run.kills])
 	if _shot_path != "" and state == S.BATTLE and battle and not _shot_played and _autotest_t > 5.6:
 		_shot_played = true
 		for i in 5:
@@ -1632,7 +1821,12 @@ func _run_autotest(delta: float) -> void:
 		S.REWARD:
 			if reward_relic != "":
 				_click("relic_take")
-			_click("rw:%d" % (randi() % 3))
+			if reward_potion != "":
+				_click("potion_take")
+			if reward_picked < 0:
+				_click("rw:%d" % (randi() % 3))
+			else:
+				_click("skip")
 		S.REST:
 			if run.hp < run.max_hp * 0.7:
 				_click("rest:heal")
@@ -1645,7 +1839,10 @@ func _run_autotest(delta: float) -> void:
 					i = k
 					break
 			if pick_mode == "upgrade":
-				_pick_card(i)
+				if pick_preview < 0:
+					_pick_card(i)
+				else:
+					_click("up_ok")
 			elif pick_mode == "remove_free":
 				_pick_card(0)
 			else:
