@@ -24,9 +24,9 @@ func draw_one() -> String:
 		return ""
 	return draw_pile.pop_back()
 
-func play(slot: int) -> String:
+func play(slot: int, exhaust := false) -> String:
 	var id := hand[slot]
-	if id != "":
+	if id != "" and not exhaust:
 		discard_pile.append(id)
 	hand[slot] = draw_one()
 	return id

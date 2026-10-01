@@ -9,6 +9,7 @@ config/features=PackedStringArray("4.7")
 
 [autoload]
 
+Settings="*res://scripts/settings.gd"
 Conductor="*res://scripts/conductor.gd"
 
 [display]

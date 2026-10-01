@@ -14,8 +14,6 @@ const MUSIC_BEATS := 192
 
 var spb: float = 60.0 / BPM
 var song_time: float = 0.0
-## Positive = judge later (compensates output/input latency). Tune per machine.
-var offset: float = 0.0
 var running: bool = false
 var clock_only: bool = false  # headless / tests: ignore audio position
 
@@ -37,7 +35,8 @@ func _ready() -> void:
 		_manual_loop = true
 	else:
 		_music.stream = _make_music()
-	_music.volume_db = -8.0
+	_music.volume_db = -6.0
+	_music.bus = "Music"
 	add_child(_music)
 	var d := "res://assets/kenney_interface_sounds/"
 	_sfx["perfect"] = load(d + "confirmation_002.ogg")
@@ -45,10 +44,18 @@ func _ready() -> void:
 	_sfx["miss"] = load(d + "error_003.ogg")
 	_sfx["hit"] = load(d + "drop_001.ogg")
 	_sfx["boom"] = load(d + "bong_001.ogg")
+	_sfx["card"] = load(d + "pluck_001.ogg")
+	_sfx["select"] = load(d + "select_002.ogg")
+	_sfx["tick"] = load(d + "tick_002.ogg")
+	_sfx["toggle"] = load(d + "toggle_001.ogg")
+	_sfx["big"] = load(d + "maximize_006.ogg")
+	_sfx["open"] = load(d + "open_001.ogg")
+	_sfx["win"] = load(d + "confirmation_004.ogg")
 	for k in _sfx:
 		var p := AudioStreamPlayer.new()
 		p.stream = _sfx[k]
 		p.volume_db = -6.0
+		p.bus = "SFX"
 		add_child(p)
 		_sfx[k] = p
 
@@ -65,6 +72,19 @@ func play_sfx(kind: String) -> void:
 	if clock_only or not _sfx.has(kind):
 		return
 	(_sfx[kind] as AudioStreamPlayer).play()
+
+var offset: float:
+	get:
+		return Settings.offset_ms / 1000.0
+
+func set_paused(p: bool) -> void:
+	running = not p
+	_music.stream_paused = p
+
+## Offset ignoring the user setting (used by the calibration screen).
+func raw_beat_offset() -> float:
+	var phase := fposmod(song_time, spb)
+	return phase if phase < spb * 0.5 else phase - spb
 
 func _process(delta: float) -> void:
 	if not running:
