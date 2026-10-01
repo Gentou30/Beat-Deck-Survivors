@@ -68,6 +68,12 @@ var calib_taps: Array = []
 var calib_done := false
 
 var _autotest := false
+var _bot_human := false
+var _bot_noise := Vector2.ZERO
+var _bot_noise_t := 0.0
+var _bot_beat := -1
+var _bot_target := 0.0
+var _bot_played := false
 var _autotest_t := 0.0
 var _shot_path := ""
 var _screen_arg := ""
@@ -98,6 +104,7 @@ func _ready() -> void:
 		bg_parts.append([Vector2(randf() * W, randf() * H), 10.0 + randf() * 40.0, 2.0 + randf() * 4.0, randf()])
 	var args := OS.get_cmdline_user_args()
 	_autotest = "--autotest" in args
+	_bot_human = "--bot=human" in args
 	for a in args:
 		if a.begins_with("--lang="):
 			Settings.lang = a.substr(7)
@@ -1468,6 +1475,18 @@ func _draw_end(c: Control) -> void:
 # ---- headless / screenshot self-test --------------------------------------
 
 func _bot_dir() -> Vector2:
+	if _bot_human:
+		# imperfect "human-like" movement: late/short-sighted flee, no bullet dodging, wobble
+		_bot_noise_t -= get_process_delta_time()
+		if _bot_noise_t <= 0.0:
+			_bot_noise_t = 0.35
+			_bot_noise = Vector2.from_angle(randf() * TAU) * 0.6
+		var hv := (Vector2(W / 2.0, 220.0) - battle.player_pos) * 0.0015 + _bot_noise
+		for e in battle.enemies:
+			var hd: float = e.pos.distance_to(battle.player_pos)
+			if hd < 110.0:
+				hv += (battle.player_pos - e.pos).normalized() * (110.0 - hd) / 110.0
+		return hv
 	var v := (Vector2(W / 2.0, 220.0) - battle.player_pos) * 0.002
 	for e in battle.enemies:
 		var d: float = e.pos.distance_to(battle.player_pos)
@@ -1551,7 +1570,20 @@ func _run_autotest(delta: float) -> void:
 		S.BATTLE:
 			if battle and not battle.ending and not run.potions.is_empty() and (run.hp < run.max_hp * 0.45 or battle.enemies.size() > 40):
 				battle.use_potion(0)
-			if battle and not battle.ending and absf(Conductor.beat_offset()) < 0.03:
+			if battle and not battle.ending and _bot_human:
+				var bn := floori((Conductor.song_time - Conductor.offset) / Conductor.spb)
+				if bn != _bot_beat:
+					_bot_beat = bn
+					_bot_target = randfn(0.0, 0.055)
+					_bot_played = false
+				if not _bot_played and Conductor.beat_offset() >= _bot_target and Conductor.beat_offset() < 0.2:
+					_bot_played = true
+					if randf() < 0.55:
+						var hs := randi() % 5
+						var hid := battle.deck.hand[hs]
+						if hid != "" and battle.energy >= int(Cards.def(hid)["cost"]):
+							battle.try_play(hs)
+			elif battle and not battle.ending and absf(Conductor.beat_offset()) < 0.03:
 				var slot := randi() % 5
 				var id := battle.deck.hand[slot]
 				if id != "" and battle.energy >= int(Cards.def(id)["cost"]):
@@ -1573,6 +1605,8 @@ func _run_autotest(delta: float) -> void:
 					break
 			if pick_mode == "upgrade":
 				_pick_card(i)
+			elif pick_mode == "remove_free":
+				_pick_card(0)
 			else:
 				goto(pick_return)
 		S.SHOP:
@@ -1582,8 +1616,9 @@ func _run_autotest(delta: float) -> void:
 				_click_prefixed("buy:r%d" % i)
 			proceed()
 		S.EVENT:
-			if event_result == "":
-				_click("ev:0")
+			if event_result == "" or event_result == "カードを1枚選んで削除する。":
+				if event_result == "":
+					_click("ev:%d" % (randi() % (event_data["opts"] as Array).size()))
 			else:
 				_click("event_done")
 		S.TREASURE:

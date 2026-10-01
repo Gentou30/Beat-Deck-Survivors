@@ -32,3 +32,10 @@ Hybrid of Vampire Survivors (auto-battle swarm), Slay the Spire (map run, deck, 
 - Web specifics: splash screen requires a click (browser audio policy) before music starts; Quit button hidden via `OS.has_feature("web")`; settings persist in IndexedDB.
 - Touch: mouse emulation from touch is OFF (project.godot); `main.gd:_touch_input` handles taps and a floating joystick (battle arena), multi-touch safe. `ui.touch` hides key hints.
 - GitHub Pages: .github/workflows/deploy-pages.yml builds with Godot + web templates downloaded from the official release and deploys on push to main (repo Settings > Pages > Source = GitHub Actions).
+
+## Iteration notes (v0.4+)
+- Bots: `--autotest` (perfect-dodging bot), `--bot=human` (imperfect; use for difficulty), `--endless`, `--daily`, `--asc=N`, `--tutorial`, `--lang=en`, `--padtest` (gamepad nav).
+- i18n: source strings are Japanese; `Loc.t()` (scripts/loc.gd) translates exact strings / templates; all UI text must go through `ui.text/ds/dms` (or `Loc.t(literal) % args`). Add new JA strings to `Loc.EN`.
+- Rendering gotcha: `draw_texture_rect` with NEGATIVE width flips but keeps the rect's LEFT edge - use `x = center - abs(w)/2`.
+- Battle glow: projectiles/particles/rings are drawn in `Battle.draw_glow` on an additive Node2D created in main.gd.
+- Achievements/stats live in `Settings` (user://settings.cfg); tests never write it.

@@ -1346,7 +1346,7 @@ func draw_world(c: Node2D) -> void:
 		var flip := -1.0 if player_pos.x < e.pos.x else 1.0
 		c.draw_circle(e.pos + Vector2(0, e.radius * 0.9), e.radius * 0.9 * sc, Color(0, 0, 0, 0.35))
 		var w := sz * flip * (2.0 - squash)
-		c.draw_texture_rect(e.tex, Rect2(e.pos.x - w / 2.0, e.pos.y - sz * squash / 2.0, w, sz * squash), false, col)
+		c.draw_texture_rect(e.tex, Rect2(e.pos.x - absf(w) / 2.0, e.pos.y - sz * squash / 2.0, w, sz * squash), false, col)
 		if e.kind == "boss" or e.kind == "elite":
 			c.draw_arc(e.pos, e.radius + 5.0, 0.0, TAU, 48, Color(e.color, 0.8), 3.0)
 		if e.spawn_t > 0.0:

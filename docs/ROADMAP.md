@@ -21,3 +21,18 @@ Each iteration: implement -> bot/headless test -> screenshots -> commit.
 - **I4 Meta**: ascension levels, unlockable 4th character, achievements, stats screen, daily seed run.
 - **I5 Reach**: English/Japanese, gamepad, accessibility toggles (reduced flash/shake, hit-window assist, colour-safe UI), mobile perf pass.
 - **I6 QA + packaging**: multi-style bots, per-character win-rate tuning, screen/event fuzz test, store page assets, README with screenshots.
+
+## Status
+- [x] I1 Onboarding + rhythm clarity (tutorial, early/late, lane marker)
+- [x] I2 Combat depth (shooter/charger/splitter, 3 beat-patterned bosses, Fever, 27 cards, 18 relics, potions)
+- [x] I3 Presentation (glow layer, death sprites, player anim, floor themes, card art, pitched PERFECT SFX, low-HP muffle)
+- [x] I4 Meta (ascension, 4th character, achievements/records, daily run)
+- [x] I5 Reach (EN/JA, gamepad, reduce-flash, timing assist)
+- [x] I6 QA (human-like bot ~25% win at A0, fuzz via bots, enemy-flip rendering bug fixed, README/screenshots)
+
+## Next ideas (I7+)
+- Act 2 (new enemy set/boss, floors 11-20) and a 5th/6th character; more events (15+), relic synergies, curses.
+- Per-track note-charts: enemy/boss attacks keyed to actual drum hits; more music + track select.
+- Hand-made art pass (replace Kenney tiles with a unified custom style) and animated UI; shader glow/CRT option.
+- Real-device mobile perf/latency pass; PWA install; leaderboard for Daily Run.
+- Localisation of store page; trailer GIF; itch/Steam page copy.
