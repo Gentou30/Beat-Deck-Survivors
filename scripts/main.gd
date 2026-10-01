@@ -224,7 +224,7 @@ func _update_play(delta: float) -> void:
 		float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
 		float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)))
 	if _autotest:
-		dir = Vector2.from_angle(Time.get_ticks_msec() / 900.0)
+		dir = _bot_dir()
 	player_pos += dir.normalized() * PLAYER_SPEED * delta
 	player_pos = player_pos.clamp(Vector2(20, 20), Vector2(W - 20, H - 230))
 	invuln = maxf(0.0, invuln - delta)
@@ -308,7 +308,8 @@ func _on_beat(_n: int) -> void:
 	var t := nearest_enemies(1)
 	if not t.is_empty():
 		_fire_bolt((t[0] as Enemy).pos, 4.0 * _dmg_mult(), 0.0)
-	if spawning:
+	var boss_wave := wave == MAX_WAVE
+	if spawning and enemies.size() < 110 and (not boss_wave or beat_count % 2 == 0):
 		var per_beat := 1 + wave / 2
 		for i in per_beat:
 			enemies.append(_make_enemy(_edge_point(), false))
@@ -318,7 +319,7 @@ func _make_enemy(p: Vector2, boss: bool) -> Enemy:
 	e.pos = p
 	if boss:
 		e.boss = true
-		e.max_hp = 700.0
+		e.max_hp = 350.0
 		e.speed = 50.0
 		e.radius = 42.0
 		e.dmg = 14
@@ -631,6 +632,15 @@ func _center(c: Control, f: Font, s: String, y: float, size: int, col: Color) ->
 	c.draw_string(f, Vector2(0, y), s, HORIZONTAL_ALIGNMENT_CENTER, W, size, col)
 
 # ---- headless / screenshot self-test --------------------------------------
+
+func _bot_dir() -> Vector2:
+	# flee from nearby enemies, drift back to the arena center
+	var v := (Vector2(W / 2.0, H / 2.0 - 100.0) - player_pos) * 0.002
+	for e in enemies:
+		var d := e.pos.distance_to(player_pos)
+		if d < 200.0:
+			v += (player_pos - e.pos).normalized() * (200.0 - d) / 200.0
+	return v
 
 func _run_autotest(delta: float) -> void:
 	_autotest_time += delta
