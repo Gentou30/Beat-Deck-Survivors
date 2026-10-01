@@ -7,6 +7,10 @@ signal beat(n: int)
 const BPM := 120.0
 const MIX_RATE := 22050
 const LOOP_BEATS := 8
+## CC0 track "Party Sector" (Joth), 120 BPM, first beat at ~0 s. 192 beats = 96.0 s
+## (the file is ~52 ms longer, so we restart at 96.0 s instead of using stream looping).
+const MUSIC_PATH := "res://assets/music/party_sector.mp3"
+const MUSIC_BEATS := 192
 
 var spb: float = 60.0 / BPM
 var song_time: float = 0.0
@@ -21,12 +25,18 @@ var _loop_len: float
 var _loops: int = 0
 var _last_pos: float = 0.0
 var _last_beat: int = -1
+var _manual_loop := false
 
 func _ready() -> void:
 	clock_only = DisplayServer.get_name() == "headless"
 	_loop_len = spb * LOOP_BEATS
 	_music = AudioStreamPlayer.new()
-	_music.stream = _make_music()
+	if ResourceLoader.exists(MUSIC_PATH):
+		_music.stream = load(MUSIC_PATH)
+		_loop_len = spb * MUSIC_BEATS
+		_manual_loop = true
+	else:
+		_music.stream = _make_music()
 	_music.volume_db = -8.0
 	add_child(_music)
 	var d := "res://assets/kenney_interface_sounds/"
@@ -63,6 +73,11 @@ func _process(delta: float) -> void:
 		song_time += delta
 	else:
 		var p := _music.get_playback_position() + AudioServer.get_time_since_last_mix()
+		if _manual_loop and p >= _loop_len - 0.02:
+			_loops += 1
+			_music.play(0.0)
+			_last_pos = 0.0
+			return
 		if p < _last_pos - 1.0:
 			_loops += 1
 		_last_pos = p
