@@ -1,5 +1,5 @@
 extends Node
-## Global beat clock. Generates its own music + SFX procedurally (no asset files),
+## Global beat clock. Generates its own music procedurally; SFX are Kenney CC0 .ogg files,
 ## and exposes song_time / beat signal / timing-offset helpers for rhythm judging.
 
 signal beat(n: int)
@@ -29,11 +29,12 @@ func _ready() -> void:
 	_music.stream = _make_music()
 	_music.volume_db = -8.0
 	add_child(_music)
-	_sfx["perfect"] = _make_sfx(988.0, 0.12, false)
-	_sfx["good"] = _make_sfx(660.0, 0.10, false)
-	_sfx["miss"] = _make_sfx(110.0, 0.18, true)
-	_sfx["hit"] = _make_sfx(220.0, 0.05, true)
-	_sfx["boom"] = _make_sfx(70.0, 0.35, true)
+	var d := "res://assets/kenney_interface_sounds/"
+	_sfx["perfect"] = load(d + "confirmation_002.ogg")
+	_sfx["good"] = load(d + "click_003.ogg")
+	_sfx["miss"] = load(d + "error_003.ogg")
+	_sfx["hit"] = load(d + "drop_001.ogg")
+	_sfx["boom"] = load(d + "bong_001.ogg")
 	for k in _sfx:
 		var p := AudioStreamPlayer.new()
 		p.stream = _sfx[k]
@@ -108,17 +109,6 @@ func _make_music() -> AudioStreamWAV:
 		s += 0.07 * signf(sin(TAU * lf * et)) * exp(-et * 9.0)
 		data.encode_s16(i * 2, int(clampf(s * 0.8, -1.0, 1.0) * 30000.0))
 	return _wav(data, true)
-
-func _make_sfx(freq: float, dur: float, noisy: bool) -> AudioStreamWAV:
-	var n := int(MIX_RATE * dur)
-	var data := PackedByteArray()
-	data.resize(n * 2)
-	for i in n:
-		var t := float(i) / MIX_RATE
-		var env := exp(-t / dur * 5.0)
-		var s := sin(TAU * freq * t) if not noisy else (sin(TAU * freq * t) * 0.6 + (randf() * 2.0 - 1.0) * 0.4)
-		data.encode_s16(i * 2, int(s * env * 22000.0))
-	return _wav(data, false)
 
 func _wav(data: PackedByteArray, looped: bool) -> AudioStreamWAV:
 	var w := AudioStreamWAV.new()

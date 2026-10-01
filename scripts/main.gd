@@ -9,6 +9,12 @@ const MAX_WAVE := 5
 const WAVE_TIME := 28.0
 const MAX_ENERGY := 5
 const PLAYER_SPEED := 270.0
+const TILE_DIR := "res://assets/kenney_tiny_dungeon/tile_%04d.png"
+const TILE_PLAYER := 84
+const TILE_BOSS := 110
+const TILE_SWORD := 104
+const TILE_FLOOR := 0
+const ENEMY_TILES := [108, 120, 121, 122, 123, 109]  # picked by wave
 const PERFECT_WINDOW := 0.07
 const GOOD_WINDOW := 0.14
 
@@ -25,6 +31,7 @@ class Enemy:
 	var boss := false
 	var blade_cd := 0.0
 	var flash := 0.0
+	var tex: Texture2D
 
 class Bolt:
 	var pos := Vector2.ZERO
@@ -74,6 +81,12 @@ var _autotest := false
 var _autotest_time := 0.0
 var _shot_path := ""
 var _hud: Control
+var _tex_cache := {}
+
+func _tex(i: int) -> Texture2D:
+	if not _tex_cache.has(i):
+		_tex_cache[i] = load(TILE_DIR % i)
+	return _tex_cache[i]
 
 func _ready() -> void:
 	randomize()
@@ -310,12 +323,15 @@ func _make_enemy(p: Vector2, boss: bool) -> Enemy:
 		e.radius = 42.0
 		e.dmg = 14
 		e.color = Color(0.8, 0.2, 0.6)
+		e.tex = _tex(TILE_BOSS)
 	else:
 		e.max_hp = 12.0 + wave * 7.0
 		e.speed = 65.0 + wave * 9.0 + randf() * 20.0
 		e.radius = 11.0 + randf() * 4.0
 		e.dmg = 5 + wave
 		e.color = Color.from_hsv(0.0 + wave * 0.04 + randf() * 0.03, 0.7, 0.9)
+		var pool_n := mini(ENEMY_TILES.size() - 1, wave + 1)
+		e.tex = _tex(ENEMY_TILES[randi() % pool_n])
 	e.hp = e.max_hp
 	return e
 
@@ -466,6 +482,11 @@ func _draw() -> void:
 	var pulse := pow(1.0 - Conductor.beat_phase(), 3.0)
 	var off := Vector2(randf_range(-shake, shake), randf_range(-shake, shake)) * 0.5
 	draw_rect(Rect2(0, 0, W, H), Color(0.05, 0.04, 0.09))
+	var floor_tex := _tex(TILE_FLOOR)
+	var fc := Color(0.35 + 0.2 * pulse, 0.3 + 0.15 * pulse, 0.45 + 0.2 * pulse)
+	for x in range(0, int(W), 64):
+		for y in range(0, int(H), 64):
+			draw_texture_rect(floor_tex, Rect2(Vector2(x, y) + off, Vector2(64, 64)), false, fc)
 	var gc := Color(0.5, 0.4, 0.9, 0.05 + 0.12 * pulse)
 	for x in range(0, int(W) + 1, 64):
 		draw_line(Vector2(x, 0) + off, Vector2(x, H) + off, gc)
@@ -475,8 +496,12 @@ func _draw() -> void:
 		return
 
 	for e in enemies:
-		var c := Color.WHITE if e.flash > 0.0 else e.color
-		draw_circle(e.pos + off, e.radius, c)
+		var c := Color(3, 3, 3) if e.flash > 0.0 else Color.WHITE
+		var sz := e.radius * 3.2
+		var flip := player_pos.x < e.pos.x
+		draw_set_transform(e.pos + off, 0.0, Vector2(-1.0 if flip else 1.0, 1.0))
+		draw_texture_rect(e.tex, Rect2(Vector2(-sz / 2.0, -sz / 2.0), Vector2(sz, sz)), false, c)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		if e.boss:
 			draw_arc(e.pos + off, e.radius + 4.0, 0.0, TAU, 48, Color(1, 0.6, 0.9), 3.0)
 			var w := 120.0
@@ -487,10 +512,13 @@ func _draw() -> void:
 	if blade_beats > 0:
 		for i in 3:
 			var bp := player_pos + Vector2.from_angle(blade_angle + i * TAU / 3.0) * 85.0
-			draw_circle(bp + off, 11.0, Color(0.5, 0.9, 1.0))
+			draw_set_transform(bp + off, blade_angle + i * TAU / 3.0 + PI / 2.0, Vector2.ONE)
+			draw_texture_rect(_tex(TILE_SWORD), Rect2(-20, -20, 40, 40), false)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	# player
 	var blink := invuln > 0.0 and int(invuln * 20.0) % 2 == 0
-	draw_circle(player_pos + off, 14.0 + 3.0 * pulse, Color(0.4, 1.0, 0.9) if not blink else Color(1, 1, 1, 0.4))
+	var ps := 52.0 + 5.0 * pulse
+	draw_texture_rect(_tex(TILE_PLAYER), Rect2(player_pos + off - Vector2(ps, ps) / 2.0, Vector2(ps, ps)), false, Color.WHITE if not blink else Color(1, 1, 1, 0.4))
 	if shield > 0:
 		draw_arc(player_pos + off, 22.0, 0.0, TAU, 32, Color(0.4, 0.6, 1.0), 3.0)
 	if frenzy_beats > 0:
