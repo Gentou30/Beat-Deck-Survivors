@@ -36,6 +36,28 @@ const DB := {
 		"tmpl": "【パワー】4ビートごとにシールド{n}。", "p": {"n": 3}, "plus": {"p": {"n": 5}}},
 	"aura": {"name": "吸血オーラ", "cost": 2, "type": "power", "color": Color(0.75, 0.2, 0.55),
 		"tmpl": "【パワー】{k}体撃破ごとにHP1回復。", "p": {"k": 6}, "plus": {"p": {"k": 4}}},
+	"pierce": {"name": "貫通弾", "cost": 1, "type": "attack", "color": Color(0.7, 0.95, 1.0),
+		"tmpl": "最大6体を貫く弾。{dmg}ダメージ。", "p": {"dmg": 14}, "plus": {"p": {"dmg": 20}}},
+	"meteor": {"name": "メテオコール", "cost": 2, "type": "attack", "color": Color(1.0, 0.5, 0.25),
+		"tmpl": "敵が密集する場所に2拍後に着弾。{dmg}ダメージ。", "p": {"dmg": 45}, "plus": {"p": {"dmg": 70}}},
+	"drum": {"name": "ドラムロール", "cost": 1, "type": "attack", "color": Color(0.95, 0.75, 0.4),
+		"tmpl": "全方位に弾を{n}発。各{dmg}ダメージ。", "p": {"n": 8, "dmg": 6}, "plus": {"p": {"n": 12, "dmg": 7}}},
+	"sonic": {"name": "ソニックブーム", "cost": 1, "type": "attack", "color": Color(0.6, 0.85, 1.0),
+		"tmpl": "前方の扇形に{dmg}ダメージ+吹き飛ばし+2拍スタン。", "p": {"dmg": 8}, "plus": {"p": {"dmg": 14}}},
+	"replay": {"name": "リプレイ", "cost": 1, "type": "skill", "color": Color(0.85, 0.7, 1.0),
+		"tmpl": "直前に使ったカードをもう一度発動。", "p": {}, "plus": {"cost": 0}},
+	"phase": {"name": "フェイズステップ", "cost": 0, "type": "skill", "color": Color(0.75, 0.9, 1.0),
+		"tmpl": "移動方向へ瞬間移動し、1秒間無敵。", "p": {}, "plus": {"p": {}}},
+	"pguard": {"name": "コンボガード", "cost": 1, "type": "skill", "color": Color(0.4, 0.75, 1.0),
+		"tmpl": "コンボ数×{k}のシールドを得る(最大コンボ20)。", "p": {"k": 2}, "plus": {"p": {"k": 3}}},
+	"overdrive": {"name": "オーバードライブ", "cost": 1, "type": "skill", "color": Color(1.0, 0.45, 0.35),
+		"tmpl": "次の{n}枚のカードの威力が1.5倍。", "p": {"n": 3}, "plus": {"p": {"n": 4}}},
+	"feverboost": {"name": "フィーバーブースト", "cost": 0, "type": "skill", "color": Color(1.0, 0.85, 0.2), "exhaust": true,
+		"tmpl": "フィーバーゲージ+{n}。廃棄。", "p": {"n": 4}, "plus": {"p": {"n": 6}}},
+	"heartbeat": {"name": "ハートビート", "cost": 1, "type": "power", "color": Color(1.0, 0.4, 0.5),
+		"tmpl": "【パワー】{k}拍ごとにHP1回復。", "p": {"k": 8}, "plus": {"p": {"k": 5}}},
+	"thorns": {"name": "トゲのオーラ", "cost": 1, "type": "power", "color": Color(0.5, 0.9, 0.4),
+		"tmpl": "【パワー】触れた敵に{n}ダメージ。", "p": {"n": 8}, "plus": {"p": {"n": 14}}},
 }
 
 const SHORT := {
@@ -44,6 +66,9 @@ const SHORT := {
 	"heavy": "貫通ビーム{dmg}", "guard": "シールド+{n}", "mend": "HP+{n}", "surge": "エネルギー+{n}",
 	"frenzy": "与ダメ2倍 {beats}拍", "freeze": "敵を減速 {beats}拍", "echo": "次のカードを2回発動",
 	"resonance": "自動弾+{n} (永続)", "fortress": "4拍ごとシールド+{n}", "aura": "{k}体撃破でHP+1",
+	"pierce": "貫通弾 {dmg} (6体)", "meteor": "2拍後に着弾 {dmg}", "drum": "全方位に{n}発 各{dmg}", "sonic": "扇形{dmg}+スタン",
+	"replay": "直前のカードを再発動", "phase": "瞬間移動+無敵1秒", "pguard": "コンボ×{k}のシールド", "overdrive": "次の{n}枚 威力1.5倍",
+	"feverboost": "フィーバー+{n}", "heartbeat": "{k}拍ごとHP+1", "thorns": "接触した敵に{n}",
 }
 
 const TYPE_JA := {"attack": "アタック", "skill": "スキル", "power": "パワー"}

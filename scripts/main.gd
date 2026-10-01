@@ -45,6 +45,8 @@ var font_res: Font
 var reward_cards: Array = []
 var reward_gold := 0
 var reward_relic := ""
+var reward_potion := ""
+var shop_potions: Array = []
 var shop_cards: Array = []
 var shop_relics: Array = []
 var shop_removed := 0
@@ -161,7 +163,7 @@ func _on_battle_done(won: bool, kind: String) -> void:
 	if not won:
 		_end_run(false)
 		return
-	if kind == "boss":
+	if kind == "boss" and run.mode == "run":
 		_end_run(true)
 		return
 	var base := 14 + randi() % 8
@@ -174,6 +176,9 @@ func _on_battle_done(won: bool, kind: String) -> void:
 		var r := Relics.random_ids(1, run.relics)
 		if not r.is_empty():
 			reward_relic = r[0]
+	reward_potion = ""
+	if kind == "elite" or kind == "boss" or randf() < 0.35:
+		reward_potion = Potions.random_id()
 	reward_cards = Cards.random_choices(3)
 	if run.mode == "endless":
 		run.wave += 1
@@ -204,7 +209,7 @@ func proceed() -> void:
 			endless_queue.append("shop")
 		if w % 3 == 0 and w > 0:
 			endless_queue.append("rest")
-		endless_queue.append("elite" if (w + 1) % 5 == 0 else "battle")
+		endless_queue.append("boss" if (w + 1) % 10 == 0 else ("elite" if (w + 1) % 5 == 0 else "battle"))
 	var nxt: String = endless_queue.pop_front()
 	_enter_type(nxt)
 
@@ -240,6 +245,10 @@ func _gen_shop() -> void:
 	shop_relics.clear()
 	for id in Relics.random_ids(2, run.relics):
 		shop_relics.append({"id": id, "price": int(Relics.DB[id]["price"]) + randi() % 20, "sold": false})
+	shop_potions.clear()
+	for i in 2:
+		var pid := Potions.random_id()
+		shop_potions.append({"id": pid, "price": int(Potions.DB[pid]["price"]) + randi() % 10, "sold": false})
 	shop_removed = 0
 
 func _events() -> Array:
@@ -451,6 +460,8 @@ func _key(k: int) -> void:
 				_toggle_pause()
 			elif not paused and k >= KEY_1 and k <= KEY_5:
 				battle.try_play(k - KEY_1)
+			elif not paused and k >= KEY_6 and k <= KEY_8:
+				battle.use_potion(k - KEY_6)
 		S.REWARD:
 			if k >= KEY_1 and k <= KEY_3:
 				_click("rw:%d" % (k - KEY_1))
@@ -475,6 +486,10 @@ func _click(id: String) -> void:
 	if id.begins_with("hand:"):
 		if not paused:
 			battle.try_play(int(id.substr(5)))
+		return
+	if id.begins_with("potion:"):
+		if state == S.BATTLE and not paused and battle:
+			battle.use_potion(int(id.substr(7)))
 		return
 	if id == "deck":
 		deck_view = true
@@ -556,10 +571,13 @@ func _click(id: String) -> void:
 		"relic_take":
 			run.add_relic(reward_relic)
 			reward_relic = ""
+		"potion_take":
+			if run.add_potion(reward_potion):
+				reward_potion = ""
 		"leave":
 			proceed()
 		"rest:heal":
-			run.heal(int(run.max_hp * 0.3))
+			run.heal(int(run.max_hp * (0.45 if run.has_relic("fuel") else 0.3)))
 			proceed()
 		"rest:upgrade":
 			pick_mode = "upgrade"
@@ -595,6 +613,13 @@ func _click_prefixed(id: String) -> void:
 			run.gold -= it["price"]
 			it["sold"] = true
 			run.deck.append(it["id"])
+			Conductor.play_sfx("win")
+	elif id.begins_with("buy:p"):
+		var it: Dictionary = shop_potions[int(id.substr(5))]
+		if not it["sold"] and run.gold >= it["price"] and run.potions.size() < run.potion_slots():
+			run.gold -= it["price"]
+			it["sold"] = true
+			run.add_potion(it["id"])
 			Conductor.play_sfx("win")
 	elif id.begins_with("buy:r"):
 		var it: Dictionary = shop_relics[int(id.substr(5))]
@@ -901,10 +926,26 @@ func _run_bar(c: Control, show_deck := true) -> void:
 	ui.text(c, fl, Vector2(150, 46), 15, Color(0.85, 0.85, 1.0))
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(300 + i * 34, 12, 30, 30), "relic:%d" % i)
+	for i in run.potion_slots():
+		var pr := Rect2(W - 206.0 - (run.potion_slots() - i) * 40.0, 10, 34, 34)
+		if i < run.potions.size():
+			var pd: Dictionary = Potions.DB[run.potions[i]]
+			var pc: Color = pd["color"]
+			var hv := ui.button_hit(c, "pot:%d" % i, pr)
+			c.draw_rect(pr, Color(pc.r * 0.3, pc.g * 0.3, pc.b * 0.3))
+			c.draw_rect(pr, pc.lerp(Color.WHITE, 0.4 if hv else 0.0), false, 2.0)
+			ui.text(c, pd["glyph"], Vector2(pr.position.x, pr.position.y + 25), 20, pc.lerp(Color.WHITE, 0.4), HORIZONTAL_ALIGNMENT_CENTER, pr.size.x)
+		else:
+			c.draw_rect(pr, Color(0.1, 0.1, 0.16, 0.6))
+			c.draw_rect(pr, Color(1, 1, 1, 0.15), false, 1.0)
 	if show_deck:
 		ui.button(c, "deck", Rect2(W - 190, 8, 170, 38), "デッキ (%d)" % run.deck.size(), true, Color(0.5, 0.7, 1.0), 18)
 
 func _relic_tips(c: Control) -> void:
+	for i in run.potions.size():
+		if ui.is_hover("pot:%d" % i) or ui.is_hover("potion:%d" % i):
+			var pd: Dictionary = Potions.DB[run.potions[i]]
+			ui.tooltip(c, pd["name"], pd["desc"], Vector2(ui.mouse.x, ui.mouse.y))
 	for i in run.relics.size():
 		if ui.is_hover("relic:%d" % i):
 			var d: Dictionary = Relics.DB[run.relics[i]]
@@ -969,7 +1010,13 @@ func _draw_reward(c: Control) -> void:
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 485.0, 520.0, 56.0), Color(0.1, 0.08, 0.04, 0.95), Color(1, 0.85, 0.4))
 		ui.text(c, "レリック: %s - %s" % [d["name"], d["desc"]], Vector2(W / 2.0 - 250.0, 520.0), 16, Color(1, 0.95, 0.7))
 		ui.button(c, "relic_take", Rect2(W / 2.0 + 280.0, 485.0, 110.0, 56.0), "受け取る", true, Color(1.0, 0.8, 0.3), 18)
-	ui.button(c, "skip", Rect2(W / 2.0 - 110.0, 590.0, 220.0, 50.0), "スキップ [S]", true, Color(0.6, 0.6, 0.8), 20)
+	if reward_potion != "":
+		var pd: Dictionary = Potions.DB[reward_potion]
+		var full := run.potions.size() >= run.potion_slots()
+		ui.panel(c, Rect2(W / 2.0 - 260.0, 550.0, 520.0, 50.0), Color(0.05, 0.08, 0.1, 0.95), pd["color"])
+		ui.text(c, "ポーション: %s - %s" % [pd["name"], pd["desc"]], Vector2(W / 2.0 - 250.0, 581.0), 15, Color(0.95, 1, 0.95))
+		ui.button(c, "potion_take", Rect2(W / 2.0 + 280.0, 550.0, 110.0, 50.0), "満杯" if full else "受け取る", not full, pd["color"], 18)
+	ui.button(c, "skip", Rect2(W / 2.0 - 110.0, 630.0, 220.0, 48.0), "進む [S]", true, Color(0.6, 0.6, 0.8), 20)
 	_relic_tips(c)
 
 func _draw_rest(c: Control) -> void:
@@ -981,7 +1028,7 @@ func _draw_rest(c: Control) -> void:
 	for i in 5:
 		var fy := 330.0 - fmod(t * 60.0 + i * 25.0, 90.0)
 		c.draw_circle(Vector2(fx + sin(t * 3.0 + i) * 14.0, fy + 60.0), 14.0 - fmod(t * 60.0 + i * 25.0, 90.0) * 0.12, Color(1.0, 0.5 + i * 0.08, 0.2, 0.7))
-	var heal := int(run.max_hp * 0.3)
+	var heal := int(run.max_hp * (0.45 if run.has_relic("fuel") else 0.3))
 	ui.button(c, "rest:heal", Rect2(W / 2.0 - 340.0, 420.0, 320.0, 110.0), "休む  HP +%d" % heal, true, Color(0.4, 0.9, 0.5), 24)
 	var can_up := false
 	for id in run.deck:
@@ -1057,6 +1104,18 @@ func _draw_shop(c: Control) -> void:
 		ui.text(c, d["name"], r.position + Vector2(14, 28), 20, d["color"])
 		c.draw_multiline_string(font_res, r.position + Vector2(14, 50), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 14, -1, Color(0.9, 0.9, 0.95))
 		ui.text(c, "%d G" % it["price"], r.position + Vector2(0, 92), 18, Color(1, 0.85, 0.3) if run.gold >= it["price"] else Color(0.7, 0.4, 0.4), HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 12.0)
+	for i in shop_potions.size():
+		var it: Dictionary = shop_potions[i]
+		var pd: Dictionary = Potions.DB[it["id"]]
+		var r := Rect2(880.0, 400.0 + i * 70.0, 300.0, 60.0)
+		if it["sold"]:
+			ui.text(c, "売り切れ", r.position + Vector2(0, 38), 18, Color(0.6, 0.6, 0.6), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+			continue
+		var ok: bool = run.gold >= it["price"] and run.potions.size() < run.potion_slots()
+		ui.button(c, "buy:p%d" % i, r, "", ok, pd["color"])
+		ui.text(c, "%s  %s" % [pd["glyph"], pd["name"]], r.position + Vector2(14, 24), 18, pd["color"])
+		ui.text(c, pd["desc"], r.position + Vector2(14, 46), 12, Color(0.9, 0.9, 0.95))
+		ui.text(c, "%d G" % it["price"], r.position + Vector2(0, 24), 16, Color(1, 0.85, 0.3) if ok else Color(0.7, 0.4, 0.4), HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 12.0)
 	var rc := 50 + 25 * shop_removed
 	ui.button(c, "remove", Rect2(95.0, 470.0, 340.0, 60.0), "カードを削除 (%d G)" % rc, run.gold >= rc and run.deck.size() > 5, Color(0.9, 0.5, 0.5), 20)
 	ui.button(c, "leave", Rect2(W / 2.0 - 110.0, 600.0, 220.0, 52.0), "店を出る", true, Color(0.6, 0.6, 0.8), 22)
@@ -1132,6 +1191,7 @@ func _debug_screen(sname: String) -> void:
 	for id in ["frenzy", "heavy", "leech", "echo", "resonance+"]:
 		run.deck.append(id)
 	run.relics = ["metronome", "sword", "coin"]
+	run.potions = ["heal", "bomb", "fury"]
 	run.floor_idx = 2
 	run.node_idx = 0
 	run.map[0][0]["visited"] = true
@@ -1159,7 +1219,11 @@ func _debug_screen(sname: String) -> void:
 			end_won = true
 			state = S.END
 		_:
-			_start_battle(sname if sname in ["boss", "elite"] else "battle")
+			if sname.begins_with("boss_"):
+				run.boss_id = sname.substr(5)
+				_start_battle("boss")
+			else:
+				_start_battle(sname if sname in ["boss", "elite"] else "battle")
 
 var _shot_played := false
 
@@ -1172,7 +1236,7 @@ func _run_autotest(delta: float) -> void:
 			if id != "" and battle.energy >= int(Cards.def(id)["cost"]):
 				battle.try_play(i)
 				break
-	if _shot_path != "" and _autotest_t > (7.0 if _screen_arg in ["boss", "elite", "battle"] else 1.0) and pending < 0:
+	if _shot_path != "" and _autotest_t > (7.0 if (_screen_arg in ["boss", "elite", "battle"] or _screen_arg.begins_with("boss_")) else 1.0) and pending < 0:
 		get_viewport().get_texture().get_image().save_png(_shot_path)
 		print("shot saved")
 		get_tree().quit()
@@ -1193,6 +1257,8 @@ func _run_autotest(delta: float) -> void:
 				avail = run.map[run.floor_idx][run.node_idx]["next"]
 			_enter_node(avail[randi() % avail.size()])
 		S.BATTLE:
+			if battle and not battle.ending and not run.potions.is_empty() and (run.hp < run.max_hp * 0.45 or battle.enemies.size() > 40):
+				battle.use_potion(0)
 			if battle and not battle.ending and absf(Conductor.beat_offset()) < 0.03:
 				var slot := randi() % 5
 				var id := battle.deck.hand[slot]

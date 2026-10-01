@@ -35,6 +35,10 @@ func _reg(id: String, rect: Rect2) -> bool:
 		_hover_id = id
 	return h
 
+## Registers a clickable rect without drawing; returns hover state.
+func button_hit(_c: Control, id: String, r: Rect2) -> bool:
+	return _reg(id, r)
+
 func text(c: Control, s: String, pos: Vector2, size: int, col: Color, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
 	c.draw_string(font, pos + Vector2(1, 1), s, align, width, size, Color(0, 0, 0, col.a * 0.6))
 	c.draw_string(font, pos, s, align, width, size, col)

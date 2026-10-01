@@ -8,6 +8,8 @@ var max_hp := 60
 var gold := 50
 var deck: Array[String] = []
 var relics: Array[String] = []
+var potions: Array[String] = []
+var boss_id := "bass"
 var map: Array = []
 var floor_idx := -1
 var node_idx := -1
@@ -26,6 +28,8 @@ func setup(p_mode: String, p_char: String) -> void:
 	for id in c["starter"]:
 		deck.append(id)
 	relics.clear()
+	potions.clear()
+	boss_id = ["bass", "drum", "metronome"].pick_random()
 	floor_idx = -1
 	node_idx = -1
 	wave = 0
@@ -54,3 +58,12 @@ func gain_gold(n: int) -> int:
 
 func heal(n: int) -> void:
 	hp = mini(max_hp, hp + n)
+
+func potion_slots() -> int:
+	return 3 + (1 if has_relic("belt") else 0)
+
+func add_potion(id: String) -> bool:
+	if potions.size() >= potion_slots():
+		return false
+	potions.append(id)
+	return true

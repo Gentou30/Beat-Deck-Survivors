@@ -13,6 +13,7 @@ const TILE_DIR := "res://assets/kenney_tiny_dungeon/tile_%04d.png"
 const TILE_SWORD := 104
 const GOOD_BASE := 0.14
 const PERFECT_BASE := 0.07
+const BOSS_NAMES := {"bass": "ベースデーモン", "drum": "ドラムメイジ", "metronome": "メトロノーム・ジャイアント"}
 
 class Enemy:
 	var pos := Vector2.ZERO
@@ -28,6 +29,14 @@ class Enemy:
 	var spawn_t := 0.35
 	var phase := 0.0
 	var tex: Texture2D
+	var stun := 0
+	var ctr := 0
+	var tele := 0
+	var aim_dir := Vector2.ZERO
+	var dash_t := 0.0
+	var dash_dir := Vector2.ZERO
+	var boss_id := ""
+	var thorn_cd := 0.0
 
 class Bolt:
 	var pos := Vector2.ZERO
@@ -35,6 +44,14 @@ class Bolt:
 	var dmg := 8.0
 	var life := 1.6
 	var color := Color(1.0, 0.85, 0.5)
+	var pierce := 0
+	var hit_ids: Array = []
+
+class EShot:
+	var pos := Vector2.ZERO
+	var vel := Vector2.ZERO
+	var dmg := 5
+	var life := 6.0
 
 class Part:
 	var pos := Vector2.ZERO
@@ -67,6 +84,17 @@ var bolts: Array[Bolt] = []
 var parts: Array[Part] = []
 var fxs: Array[Fx] = []
 var slams: Array = []  # {pos, r, t, dmg}
+var eshots: Array[EShot] = []
+var delayed: Array = []  # {beats, pos, r, dmg}
+var pending_spawns: Array[Enemy] = []
+var boss_id := "bass"
+var fever_gauge := 0.0
+var fever_beats := 0
+var overdrive := 0
+var thorns := 0
+var heart_k := 0
+var last_card := ""
+var aegis_ready := false
 
 var player_pos := Vector2(W / 2.0, 250.0)
 var shield := 0
@@ -150,11 +178,14 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 	if run.has_relic("ring"):
 		shield += 10
 	tutorial = kind == "tutorial"
+	boss_id = run.boss_id if run.mode == "run" else (["bass", "drum", "metronome"] as Array)[(run.wave / 10) % 3]
+	echo_pending = run.has_relic("echoshell")
+	aegis_ready = run.has_relic("aegis")
 	time_left = 0.0 if (kind == "boss" or tutorial) else (26.0 if kind == "elite" or kind == "endless" else 24.0)
 	spawning = true
 	match kind:
 		"boss":
-			banner = "BOSS"
+			banner = "BOSS: " + String(BOSS_NAMES[boss_id])
 			var b := _make_enemy("boss")
 			b.pos = Vector2(W / 2.0, -40.0)
 			enemies.append(b)
@@ -187,7 +218,83 @@ func good_window() -> float:
 
 func dmg_mult() -> float:
 	var per := 0.03 if run.has_relic("amp") else 0.02
-	return (2.0 if frenzy_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per)
+	return (2.0 if frenzy_beats > 0 else 1.0) * (1.5 if fever_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per)
+
+func fever_max() -> float:
+	return 8.0 if run.has_relic("headphones") else 10.0
+
+func _add_fever(v: float) -> void:
+	if fever_beats > 0:
+		return
+	fever_gauge = minf(fever_max(), fever_gauge + v)
+	if fever_gauge >= fever_max():
+		_start_fever()
+
+func _start_fever() -> void:
+	fever_beats = 8
+	fever_gauge = 0.0
+	banner = "FEVER!!"
+	banner_time = 1.6
+	flash(Color(1.0, 0.85, 0.3), 0.55)
+	ring(player_pos, 320.0, Color(1.0, 0.85, 0.3), 0.6)
+	burst(player_pos, Color(1.0, 0.9, 0.4), 70, 520.0, 0.8, 6.0)
+	do_shake(14.0)
+	hitstop = 0.08
+	Conductor.play_sfx("big")
+	for e in enemies:
+		if e.pos.distance_to(player_pos) < 320.0 + e.radius:
+			hit(e, 25.0 * dmg_mult())
+			e.pos += (e.pos - player_pos).normalized() * 60.0
+
+func _pick_kind() -> String:
+	var r := randf()
+	if diff >= 2.2 and r < 0.12:
+		return "tank"
+	if diff >= 2.0 and r < 0.22:
+		return "shooter"
+	if diff >= 2.6 and r < 0.30:
+		return "charger"
+	if diff >= 1.8 and r < 0.40:
+		return "splitter"
+	if diff >= 1.5 and r < 0.58:
+		return "fast"
+	return "grunt"
+
+func _eshot(p: Vector2, dir: Vector2, spd: float, dmg: int) -> void:
+	var sh := EShot.new()
+	sh.pos = p
+	sh.vel = dir.normalized() * spd
+	sh.dmg = dmg
+	eshots.append(sh)
+
+func _keep_distance(e: Enemy, to_p: Vector2, far: float, near: float) -> Vector2:
+	var dd := e.pos.distance_to(player_pos)
+	if dd > far:
+		return to_p
+	if dd < near:
+		return -to_p
+	return to_p.orthogonal() * (1.0 if sin(e.phase) > 0.0 else -1.0)
+
+func _cluster_pos() -> Vector2:
+	var best := player_pos + Vector2(0, -160)
+	var best_n := -1
+	var cand := nearest_enemies(14)
+	for a in cand:
+		var n := 0
+		for b in cand:
+			if (a as Enemy).pos.distance_to((b as Enemy).pos) < 130.0:
+				n += 1
+		if n > best_n:
+			best_n = n
+			best = (a as Enemy).pos
+	return best
+
+func _mini_nova() -> void:
+	ring(player_pos, 130.0, Color(0.95, 0.7, 0.4), 0.35)
+	burst(player_pos, Color(0.95, 0.7, 0.4), 20, 260.0, 0.4, 4.0)
+	for e in enemies:
+		if e.pos.distance_to(player_pos) < 130.0 + e.radius:
+			hit(e, 12.0 * dmg_mult())
 
 func card_rect(i: int) -> Rect2:
 	var cw := 150.0
@@ -208,12 +315,46 @@ func _make_enemy(k: String) -> Enemy:
 	var d := diff
 	match k:
 		"boss":
+			e.boss_id = boss_id
 			e.max_hp = 260.0 + 70.0 * d
 			e.speed = 48.0
 			e.radius = 44.0
 			e.dmg = 14
 			e.color = Color(0.85, 0.25, 0.6)
 			e.tex = tex(110)
+			if boss_id == "drum":
+				e.max_hp = 220.0 + 60.0 * d
+				e.speed = 36.0
+				e.radius = 38.0
+				e.color = Color(0.5, 0.7, 1.0)
+				e.tex = tex(111)
+			elif boss_id == "metronome":
+				e.max_hp = 300.0 + 80.0 * d
+				e.speed = 44.0
+				e.radius = 50.0
+				e.color = Color(1.0, 0.7, 0.3)
+				e.tex = tex(109)
+		"shooter":
+			e.max_hp = 14.0 + 6.0 * d
+			e.speed = 70.0
+			e.radius = 13.0
+			e.dmg = 4 + int(d)
+			e.color = Color(0.7, 0.8, 1.0)
+			e.tex = tex(121)
+		"charger":
+			e.max_hp = 26.0 + 12.0 * d
+			e.speed = 60.0
+			e.radius = 16.0
+			e.dmg = 7 + int(d)
+			e.color = Color(1.0, 0.6, 0.4)
+			e.tex = tex(123)
+		"splitter":
+			e.max_hp = 28.0 + 10.0 * d
+			e.speed = 54.0 + 3.0 * d
+			e.radius = 17.0
+			e.dmg = 5 + int(d)
+			e.color = Color(0.7, 0.9, 0.5)
+			e.tex = tex(124)
 		"elite":
 			e.max_hp = 110.0 + 38.0 * d
 			e.speed = 62.0 + 3.0 * d
@@ -241,7 +382,7 @@ func _make_enemy(k: String) -> Enemy:
 			e.radius = 12.0 + randf() * 3.0
 			e.dmg = 4 + int(d)
 			e.color = Color(0.4, 1.0, 0.8)
-			e.tex = tex(108 if d < 2.6 else 121)
+			e.tex = tex(108)
 	e.hp = e.max_hp
 	e.phase = randf() * TAU
 	return e
@@ -320,6 +461,30 @@ func on_beat(_n: int) -> void:
 	if ending:
 		return
 	ring(player_pos, 70.0, Color(1, 1, 1, 0.25), 0.4)
+	for dl in delayed:
+		dl["beats"] -= 1
+	for dl in delayed:
+		if dl["beats"] <= 0:
+			var dp: Vector2 = dl["pos"]
+			ring(dp, dl["r"], Color(1.0, 0.55, 0.25), 0.5)
+			burst(dp, Color(1.0, 0.6, 0.25), 45, 380.0, 0.6, 6.0, 120.0)
+			do_shake(11.0)
+			hitstop = 0.05
+			Conductor.play_sfx("boom")
+			for e in enemies:
+				if e.pos.distance_to(dp) < float(dl["r"]) + e.radius:
+					hit(e, float(dl["dmg"]))
+	delayed = delayed.filter(func(d: Dictionary) -> bool: return d["beats"] > 0)
+	if fever_beats > 0:
+		fever_beats -= 1
+		if fever_beats == 0:
+			float_text(player_pos + Vector2(0, -80), "フィーバー終了", Color(1.0, 0.9, 0.5), 16)
+	if run.has_relic("shieldgen") and beat_count % 2 == 0 and shield < 10:
+		shield += 1
+	if run.has_relic("drumstick") and beat_count % 10 == 0:
+		_mini_nova()
+	if heart_k > 0 and beat_count % heart_k == 0:
+		_heal(1)
 	if blade_beats > 0:
 		blade_beats -= 1
 	if frenzy_beats > 0:
@@ -337,7 +502,9 @@ func on_beat(_n: int) -> void:
 	var targets := nearest_enemies(2 if run.char_id == "ranger" else 1)
 	var adm := 4.0 + res_bonus + (3.0 if run.has_relic("sword") else 0.0)
 	for i in targets.size():
-		_fire_bolt((targets[i] as Enemy).pos, adm * dmg_mult(), 0.0)
+		var ab := _fire_bolt((targets[i] as Enemy).pos, adm * dmg_mult(), 0.0)
+		if run.has_relic("scope"):
+			ab.pierce = 2
 	# spawning
 	if tutorial:
 		if tut_step >= 1 and enemies.size() < 2 + tut_step and beat_count % 2 == 0:
@@ -349,35 +516,79 @@ func on_beat(_n: int) -> void:
 		var n := int(spawn_acc)
 		spawn_acc -= n
 		for i in n:
-			var k := "grunt"
-			var r := randf()
-			if diff >= 2.2 and r < 0.14:
-				k = "tank"
-			elif diff >= 1.5 and r < 0.38:
-				k = "fast"
+			var k := _pick_kind()
 			var e := _make_enemy(k)
 			e.pos = _edge_point()
 			enemies.append(e)
-	# boss / elite abilities
+	# enemy abilities, all locked to the beat grid
 	for e in enemies:
 		if e.spawn_t > 0.0:
 			continue
-		if e.kind == "boss" and beat_count % 8 == 0:
-			slams.append({"pos": player_pos, "r": 170.0, "t": 4.0 * Conductor.spb, "dmg": 14})
-			if beat_count % 16 == 0:
-				for i in 4:
-					var m := _make_enemy("grunt")
-					m.pos = e.pos + Vector2.from_angle(i * TAU / 4.0) * 60.0
-					enemies.append(m)
-		elif e.kind == "elite" and beat_count % 8 == 4:
-			slams.append({"pos": player_pos, "r": 120.0, "t": 4.0 * Conductor.spb, "dmg": 10})
+		e.ctr += 1
+		if e.stun > 0:
+			e.stun -= 1
+			continue
+		var to_p := (player_pos - e.pos).normalized()
+		match e.kind:
+			"shooter":
+				if e.ctr % 4 == 3:
+					e.tele = 1
+					e.aim_dir = to_p
+				elif e.ctr % 4 == 0 and e.tele > 0:
+					e.tele = 0
+					_eshot(e.pos, e.aim_dir, 240.0, 4 + int(diff))
+			"charger":
+				if e.ctr % 6 == 4:
+					e.tele = 2
+					e.aim_dir = to_p
+				elif e.tele > 0:
+					e.tele -= 1
+					if e.tele == 0:
+						e.dash_dir = e.aim_dir
+						e.dash_t = 0.45
+			"elite":
+				if e.ctr % 8 == 4:
+					slams.append({"pos": player_pos, "r": 120.0, "t": 4.0 * Conductor.spb, "dmg": 10})
+			"boss":
+				_boss_beat(e, to_p)
 
-func _fire_bolt(target: Vector2, dmg: float, spread: float) -> void:
+func _boss_beat(e: Enemy, to_p: Vector2) -> void:
+	match e.boss_id:
+		"drum":
+			if e.ctr % 4 == 0:
+				var off := e.ctr * 0.37
+				for i in 10:
+					_eshot(e.pos, Vector2.from_angle(off + i * TAU / 10.0), 200.0, 6 + int(diff * 0.5))
+			elif e.ctr % 8 == 6:
+				for i in 5:
+					_eshot(e.pos, to_p.rotated((i - 2) * 0.22), 280.0, 7 + int(diff * 0.5))
+		"metronome":
+			if e.ctr % 8 == 4:
+				e.tele = 2
+				e.aim_dir = to_p
+			elif e.tele > 0:
+				e.tele -= 1
+				if e.tele == 0:
+					e.dash_dir = e.aim_dir
+					e.dash_t = 0.7
+			if e.ctr % 8 == 0:
+				slams.append({"pos": player_pos, "r": 130.0, "t": 4.0 * Conductor.spb, "dmg": 12})
+		_:
+			if e.ctr % 8 == 0:
+				slams.append({"pos": player_pos, "r": 170.0, "t": 4.0 * Conductor.spb, "dmg": 14})
+				if e.ctr % 16 == 0:
+					for i in 4:
+						var m := _make_enemy("grunt")
+						m.pos = e.pos + Vector2.from_angle(i * TAU / 4.0) * 60.0
+						enemies.append(m)
+
+func _fire_bolt(target: Vector2, dmg: float, spread: float) -> Bolt:
 	var b := Bolt.new()
 	b.pos = player_pos
 	b.vel = (target - player_pos).normalized().rotated(spread) * 640.0
 	b.dmg = dmg
 	bolts.append(b)
+	return b
 
 func update(delta: float) -> void:
 	for f in fxs:
@@ -447,16 +658,55 @@ func _update_play(delta: float) -> void:
 	for e in enemies:
 		e.flash = maxf(0.0, e.flash - delta)
 		e.blade_cd = maxf(0.0, e.blade_cd - delta)
+		e.thorn_cd = maxf(0.0, e.thorn_cd - delta)
 		if e.spawn_t > 0.0:
 			e.spawn_t -= delta
 			continue
 		var to_p := (player_pos - e.pos).normalized()
 		var mv := to_p
-		if e.kind == "fast":
-			mv = (to_p + to_p.orthogonal() * sin(elapsed * 6.0 + e.phase) * 0.8).normalized()
-		e.pos += mv * e.speed * slow * delta
-		if invuln <= 0.0 and e.pos.distance_to(player_pos) < e.radius + 14.0:
-			damage_player(e.dmg)
+		var spd_e := e.speed
+		var moving := e.stun <= 0
+		match e.kind:
+			"fast":
+				mv = (to_p + to_p.orthogonal() * sin(elapsed * 6.0 + e.phase) * 0.8).normalized()
+			"shooter":
+				mv = _keep_distance(e, to_p, 330.0, 230.0)
+			"charger":
+				if e.tele > 0:
+					moving = false
+				elif e.dash_t > 0.0:
+					e.dash_t -= delta
+					mv = e.dash_dir
+					spd_e = 560.0
+			"boss":
+				if e.boss_id == "drum":
+					mv = _keep_distance(e, to_p, 380.0, 260.0)
+				elif e.boss_id == "metronome":
+					if e.tele > 0:
+						moving = false
+					elif e.dash_t > 0.0:
+						e.dash_t -= delta
+						mv = e.dash_dir
+						spd_e = 620.0
+		if moving:
+			e.pos += mv * spd_e * slow * delta
+			e.pos = e.pos.clamp(Vector2(-70, -70), Vector2(W + 70, ARENA_BOTTOM + 70))
+		if e.pos.distance_to(player_pos) < e.radius + 14.0:
+			if thorns > 0 and e.thorn_cd <= 0.0:
+				hit(e, float(thorns))
+				e.thorn_cd = 0.4
+			if invuln <= 0.0:
+				damage_player(e.dmg)
+
+	for sh in eshots:
+		sh.pos += sh.vel * delta
+		sh.life -= delta
+		if sh.pos.x < -60.0 or sh.pos.x > W + 60.0 or sh.pos.y < -60.0 or sh.pos.y > H:
+			sh.life = 0.0
+		elif invuln <= 0.0 and sh.pos.distance_to(player_pos) < 20.0:
+			damage_player(sh.dmg)
+			sh.life = 0.0
+	eshots = eshots.filter(func(x: EShot) -> bool: return x.life > 0.0)
 
 	for b in bolts:
 		b.pos += b.vel * delta
@@ -464,16 +714,24 @@ func _update_play(delta: float) -> void:
 		if randf() < 0.7:
 			burst(b.pos, b.color, 1, 20.0, 0.25, 3.0)
 		for e in enemies:
-			if e.hp > 0.0 and e.spawn_t <= 0.0 and b.pos.distance_to(e.pos) < e.radius + 5.0:
+			if e.hp > 0.0 and e.spawn_t <= 0.0 and b.pos.distance_to(e.pos) < e.radius + 5.0 and not b.hit_ids.has(e.get_instance_id()):
 				hit(e, b.dmg)
-				b.life = 0.0
-				break
+				if b.pierce > 0:
+					b.pierce -= 1
+					b.hit_ids.append(e.get_instance_id())
+				else:
+					b.life = 0.0
+					break
 	bolts = bolts.filter(func(b: Bolt) -> bool: return b.life > 0.0)
 
 	if blade_beats > 0:
 		for i in blade_n:
 			var bp := player_pos + Vector2.from_angle(blade_angle + i * TAU / blade_n) * 85.0
 			burst(bp, Color(0.5, 0.9, 1.0), 1, 10.0, 0.25, 3.0)
+			for sh in eshots:
+				if bp.distance_to(sh.pos) < 24.0:
+					sh.life = 0.0
+					burst(sh.pos, Color(1.0, 0.5, 0.6), 5, 120.0, 0.3, 3.0)
 			for e in enemies:
 				if e.blade_cd <= 0.0 and e.spawn_t <= 0.0 and bp.distance_to(e.pos) < e.radius + 14.0:
 					hit(e, 7.0 * blade_power * dmg_mult())
@@ -504,6 +762,8 @@ func _update_play(delta: float) -> void:
 				elite_alive = true
 		else:
 			_on_kill(e)
+	alive.append_array(pending_spawns)
+	pending_spawns.clear()
 	enemies = alive
 
 	if tutorial:
@@ -521,6 +781,16 @@ func _update_play(delta: float) -> void:
 func _on_kill(e: Enemy) -> void:
 	kills += 1
 	run.kills += 1
+	if e.kind == "splitter":
+		for i in 2:
+			var sp := _make_enemy("grunt")
+			sp.max_hp = maxf(6.0, e.max_hp * 0.3)
+			sp.hp = sp.max_hp
+			sp.radius = 9.0
+			sp.speed *= 1.2
+			sp.pos = e.pos + Vector2.from_angle(randf() * TAU) * 14.0
+			sp.spawn_t = 0.1
+			pending_spawns.append(sp)
 	burst(e.pos, e.color, 14 if e.radius < 25.0 else 40, 220.0, 0.6, 5.0, 120.0)
 	ring(e.pos, e.radius * 2.2, e.color, 0.25)
 	if e.kind == "boss":
@@ -557,6 +827,8 @@ func _finish(won: bool) -> void:
 	spawning = false
 	bolts.clear()
 	slams.clear()
+	eshots.clear()
+	delayed.clear()
 	for e in enemies:
 		burst(e.pos, e.color, 10, 200.0, 0.5, 4.0, 100.0)
 	enemies.clear()
@@ -571,6 +843,13 @@ func damage_player(d: int) -> void:
 		invuln = 0.4
 		do_shake(3.0)
 		burst(player_pos, Color(1, 0.4, 0.4), 6, 160.0, 0.4, 4.0)
+		return
+	if aegis_ready:
+		aegis_ready = false
+		invuln = 0.7
+		ring(player_pos, 56.0, Color(1.0, 1.0, 0.6), 0.5)
+		float_text(player_pos + Vector2(0, -40), "イージス！", Color(1.0, 1.0, 0.6), 20)
+		Conductor.play_sfx("big")
 		return
 	invuln = 0.55
 	do_shake(8.0)
@@ -598,6 +877,38 @@ func hit(e: Enemy, dmg: float) -> void:
 	e.flash = 0.1
 	burst(e.pos, Color(1, 0.9, 0.6), 3, 160.0, 0.3, 3.0)
 	float_text(e.pos + Vector2(0, -e.radius - 6.0), str(int(dmg)), Color(1, 0.95, 0.7), 14 if dmg < 20.0 else 20, 0.55)
+
+# ---- potions ---------------------------------------------------------------
+
+func use_potion(i: int) -> void:
+	if ending or i < 0 or i >= run.potions.size():
+		return
+	var id: String = run.potions[i]
+	run.potions.remove_at(i)
+	var col: Color = Potions.DB[id]["color"]
+	float_text(player_pos + Vector2(0, -74), String(Potions.DB[id]["name"]), col, 18, 1.0)
+	burst(player_pos, col, 22, 230.0, 0.6, 4.0)
+	ring(player_pos, 80.0, col, 0.4)
+	Conductor.play_sfx("open")
+	match id:
+		"heal":
+			_heal(int(run.max_hp * 0.3))
+		"energy":
+			energy = mini(max_energy, energy + 3)
+		"bomb":
+			ring(player_pos, 600.0, col, 0.5)
+			do_shake(10.0)
+			Conductor.play_sfx("boom")
+			for e in enemies:
+				hit(e, 40.0)
+		"freeze":
+			slow_beats = maxi(slow_beats, 8)
+			flash(col, 0.2)
+		"shield":
+			shield = mini(80, shield + 20)
+		"fury":
+			frenzy_beats = maxi(frenzy_beats, 10)
+			_add_fever(3.0)
 
 # ---- tutorial --------------------------------------------------------------
 
@@ -670,6 +981,12 @@ func try_play(slot: int) -> void:
 		return
 	var d: Dictionary = Cards.def(id)
 	var cost: int = d["cost"]
+	var free := fever_beats > 0
+	if not free and run.has_relic("clover") and randf() < 0.15:
+		free = true
+		float_text(player_pos + Vector2(0, -100), "ラッキー！", Color(0.5, 1.0, 0.5), 14)
+	if free:
+		cost = 0
 	if energy < cost:
 		float_text(player_pos + Vector2(0, -44), "エネルギー不足", Color(0.7, 0.7, 0.75))
 		Conductor.play_sfx("miss")
@@ -686,6 +1003,7 @@ func try_play(slot: int) -> void:
 		col = Color(1.0, 0.9, 0.3)
 		combo += 1
 		flash(Color(1.0, 0.9, 0.4), 0.18)
+		_add_fever(1.0)
 		ring(player_pos, 110.0, col, 0.4)
 		burst(player_pos, col, 22, 280.0, 0.5, 5.0)
 	elif a <= good_window():
@@ -695,8 +1013,10 @@ func try_play(slot: int) -> void:
 		combo += 1
 		ring(player_pos, 80.0, col, 0.3)
 		burst(player_pos, col, 10, 200.0, 0.4, 4.0)
+		_add_fever(0.4)
 	else:
 		combo = 0
+		fever_gauge *= 0.5
 	if grade != "MISS" and run.char_id == "wizard" and combo > 0 and combo % 5 == 0:
 		energy = mini(max_energy, energy + 1)
 		float_text(player_pos + Vector2(0, -80), "アルカナ +1", Color(0.8, 0.6, 1.0), 16)
@@ -718,8 +1038,14 @@ func try_play(slot: int) -> void:
 	if Cards.base_id(id) != "echo":
 		echo_pending = false
 	var m := gm * dmg_mult()
+	var od := overdrive > 0 and Cards.base_id(id) != "overdrive"
+	if od:
+		m *= 1.5
+		overdrive -= 1
 	for i in times:
 		_apply_card(id, m)
+	if Cards.base_id(id) != "replay":
+		last_card = id
 	cast_name = String(d["name"]) + (" ×2" if times == 2 else "")
 	cast_short = Cards.short(id)
 	cast_col = d["color"]
@@ -824,6 +1150,70 @@ func _apply_card(id: String, m: float) -> void:
 			fort += int(p["n"])
 		"aura":
 			aura_k = int(p["k"]) if aura_k == 0 else mini(aura_k, int(p["k"]))
+		"pierce":
+			var t := nearest_enemies(1)
+			var tgt := player_pos + Vector2.UP
+			if not t.is_empty():
+				tgt = (t[0] as Enemy).pos
+			var pb := _fire_bolt(tgt, float(p["dmg"]) * m, 0.0)
+			pb.pierce = 6
+			pb.life = 1.3
+			pb.color = col
+		"meteor":
+			delayed.append({"beats": 2, "pos": _cluster_pos(), "r": 120.0, "dmg": float(p["dmg"]) * m})
+		"drum":
+			var n: int = p["n"]
+			for i in n:
+				var db := Bolt.new()
+				db.pos = player_pos
+				db.vel = Vector2.from_angle(i * TAU / n + elapsed) * 560.0
+				db.dmg = float(p["dmg"]) * m
+				db.life = 0.9
+				db.color = col
+				bolts.append(db)
+			ring(player_pos, 90.0, col, 0.3)
+		"sonic":
+			var t := nearest_enemies(1)
+			var dir := Vector2.UP
+			if not t.is_empty():
+				dir = ((t[0] as Enemy).pos - player_pos).normalized()
+			ring(player_pos + dir * 70.0, 130.0, col, 0.3)
+			line_fx(player_pos, player_pos + dir * 260.0, col, 0.3, "beam", 40.0)
+			do_shake(6.0)
+			Conductor.play_sfx("boom")
+			for e in enemies:
+				var v := e.pos - player_pos
+				if v.length() < 260.0 + e.radius and absf(v.angle_to(dir)) < 0.9:
+					hit(e, float(p["dmg"]) * m)
+					e.pos += v.normalized() * 110.0
+					e.stun = 2
+		"replay":
+			if last_card != "":
+				_apply_card(last_card, m)
+		"phase":
+			var md := move_dir()
+			if bot_dir.is_valid():
+				md = bot_dir.call()
+			if md.length() < 0.1:
+				var t := nearest_enemies(1)
+				md = (player_pos - (t[0] as Enemy).pos) if not t.is_empty() else Vector2.UP
+			burst(player_pos, col, 18, 200.0, 0.4, 4.0)
+			player_pos = (player_pos + md.normalized() * 150.0).clamp(Vector2(24, 24), Vector2(W - 24, ARENA_BOTTOM))
+			invuln = maxf(invuln, 1.0)
+			burst(player_pos, col, 18, 200.0, 0.4, 4.0)
+		"pguard":
+			var n := int(float(p["k"]) * maxf(1.0, minf(combo, 20.0)))
+			shield = mini(80, shield + n)
+			float_text(player_pos + Vector2(0, -34), "+%d" % n, Color(0.5, 0.7, 1.0))
+		"overdrive":
+			overdrive = int(p["n"])
+			flash(col, 0.15)
+		"feverboost":
+			_add_fever(float(p["n"]))
+		"heartbeat":
+			heart_k = int(p["k"]) if heart_k == 0 else mini(heart_k, int(p["k"]))
+		"thorns":
+			thorns += int(p["n"])
 
 # ---- drawing: world --------------------------------------------------------
 
@@ -853,6 +1243,20 @@ func draw_world(c: Node2D) -> void:
 		c.draw_circle(sp, s["r"], Color(1, 0.2, 0.2, 0.08 + 0.15 * k))
 		c.draw_arc(sp, s["r"], 0.0, TAU, 48, Color(1, 0.4, 0.3, 0.5 + 0.5 * k), 3.0)
 		c.draw_arc(sp, s["r"] * k, 0.0, TAU, 48, Color(1, 0.8, 0.5, 0.8), 2.0)
+	# telegraphs: charge lines + delayed impacts
+	for e in enemies:
+		if e.tele > 0:
+			var tl := 0.5 + 0.5 * sin(elapsed * 14.0)
+			if e.kind == "shooter":
+				c.draw_line(e.pos, e.pos + e.aim_dir * 520.0, Color(1.0, 0.4, 0.5, 0.18 + 0.2 * tl), 2.0)
+			else:
+				c.draw_line(e.pos, e.pos + e.aim_dir * 900.0, Color(1.0, 0.3, 0.3, 0.25 + 0.3 * tl), e.radius * 1.6)
+	for dl in delayed:
+		var dp: Vector2 = dl["pos"]
+		var dk: float = float(dl["beats"]) / 2.0
+		c.draw_circle(dp, dl["r"], Color(1.0, 0.45, 0.2, 0.08 + 0.12 * (1.0 - dk)))
+		c.draw_arc(dp, dl["r"], 0.0, TAU, 40, Color(1.0, 0.6, 0.3, 0.9), 3.0)
+		c.draw_arc(dp, dl["r"] * dk, 0.0, TAU, 40, Color(1.0, 0.9, 0.5, 0.8), 2.0)
 	# enemies
 	for e in enemies:
 		var sc := 1.0 - maxf(e.spawn_t, 0.0) / 0.35
@@ -870,6 +1274,9 @@ func draw_world(c: Node2D) -> void:
 	for b in bolts:
 		c.draw_circle(b.pos, 7.0, Color(b.color, 0.35))
 		c.draw_circle(b.pos, 4.0, b.color)
+	for sh in eshots:
+		c.draw_circle(sh.pos, 11.0, Color(1.0, 0.3, 0.5, 0.3))
+		c.draw_circle(sh.pos, 6.0, Color(1.0, 0.75, 0.85))
 	if blade_beats > 0:
 		for i in blade_n:
 			var a := blade_angle + i * TAU / blade_n
@@ -888,6 +1295,10 @@ func draw_world(c: Node2D) -> void:
 		c.draw_arc(player_pos, 26.0, 0.0, TAU, 32, Color(0.5, 0.7, 1.0, 0.9), 3.0)
 	if frenzy_beats > 0:
 		c.draw_arc(player_pos, 32.0 + 3.0 * pulse, 0.0, TAU, 32, Color(1.0, 0.6, 0.2), 2.0)
+	if fever_beats > 0:
+		c.draw_arc(player_pos, 38.0 + 4.0 * pulse, 0.0, TAU, 32, Color.from_hsv(fmod(elapsed * 1.5, 1.0), 0.6, 1.0), 4.0)
+		if randf() < 0.6:
+			burst(player_pos, Color.from_hsv(randf(), 0.6, 1.0), 1, 90.0, 0.5, 4.0)
 	if echo_pending:
 		c.draw_arc(player_pos, 38.0, 0.0, TAU, 6, Color(0.85, 0.7, 1.0), 2.0)
 	_draw_mini_status(c)
@@ -919,6 +1330,8 @@ func draw_world(c: Node2D) -> void:
 	if hp_frac < 0.35:
 		_vignette(c, Color(0.9, 0.05, 0.1), (0.35 - hp_frac) * 1.4 + 0.1 * sin(elapsed * 6.0))
 	_vignette(c, Color(0.4, 0.3, 0.9), 0.12 * pulse)
+	if fever_beats > 0:
+		_vignette(c, Color(1.0, 0.8, 0.2), 0.2 + 0.12 * pulse)
 	if flash_a > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(flash_col, flash_a * 0.5))
 
@@ -1017,10 +1430,39 @@ func draw_hud(c: Control) -> void:
 		buffs.append(["オーラ %d/%d" % [aura_count, aura_k], Color(0.8, 0.3, 0.6)])
 	if echo_pending:
 		buffs.append(["エコー待機", Color(0.85, 0.7, 1.0)])
+	if fever_beats > 0:
+		buffs.append(["FEVER %d" % fever_beats, Color.from_hsv(fmod(elapsed * 1.5, 1.0), 0.5, 1.0)])
+	if overdrive > 0:
+		buffs.append(["オーバードライブ x%d" % overdrive, Color(1.0, 0.5, 0.4)])
+	if thorns > 0:
+		buffs.append(["トゲ %d" % thorns, Color(0.5, 0.9, 0.4)])
+	if heart_k > 0:
+		buffs.append(["ハートビート", Color(1.0, 0.45, 0.55)])
 	for b in buffs:
 		ui.text(c, b[0], Vector2(rx, by), 14, b[1], HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
 		by += 20.0
 	ui.button(c, "pause", Rect2(W - 74, 8, 64, 46), "||", true, Color(0.6, 0.6, 0.8), 20)
+	# fever gauge
+	var fx0 := W - 310.0
+	var fr := fever_gauge / fever_max() if fever_beats == 0 else fever_beats / 8.0
+	var fcol := Color(1.0, 0.8, 0.25) if fever_beats == 0 else Color.from_hsv(fmod(elapsed * 1.5, 1.0), 0.6, 1.0)
+	ui.bar(c, Rect2(fx0, 68, 210, 9), fr, fcol, Color(0.15, 0.12, 0.05))
+	ui.text(c, "FEVER", Vector2(fx0 - 46.0, 77.0), 11, Color(1.0, 0.85, 0.4))
+	# potions
+	for i in run.potion_slots():
+		var pr := Rect2(10 + i * 42, 160, 38, 38)
+		if i < run.potions.size():
+			var pd: Dictionary = Potions.DB[run.potions[i]]
+			var pc: Color = pd["color"]
+			var ph := ui.button_hit(c, "potion:%d" % i, pr)
+			c.draw_rect(pr, Color(pc.r * 0.3, pc.g * 0.3, pc.b * 0.3, 0.95))
+			c.draw_rect(pr, pc.lerp(Color.WHITE, 0.4 if ph else 0.0), false, 2.0)
+			ui.text(c, pd["glyph"], Vector2(pr.position.x, pr.position.y + 27), 22, pc.lerp(Color.WHITE, 0.4), HORIZONTAL_ALIGNMENT_CENTER, pr.size.x)
+			if not ui.touch:
+				ui.text(c, str(6 + i), Vector2(pr.position.x + 2, pr.position.y + 12), 10, Color(1, 1, 1, 0.6))
+		else:
+			c.draw_rect(pr, Color(0.1, 0.1, 0.16, 0.6))
+			c.draw_rect(pr, Color(1, 1, 1, 0.15), false, 1.0)
 
 	# rhythm lane
 	var cx := W / 2.0
@@ -1058,7 +1500,7 @@ func draw_hud(c: Control) -> void:
 	# boss / elite bar
 	for e in enemies:
 		if e.kind == "boss" or e.kind == "elite":
-			var nm := "BOSS" if e.kind == "boss" else "ELITE"
+			var nm := ("BOSS: " + String(BOSS_NAMES[e.boss_id])) if e.kind == "boss" else "ELITE"
 			ui.bar(c, Rect2(cx - 220, 82, 440, 14), e.hp / e.max_hp, Color(0.9, 0.3, 0.6))
 			ui.text(c, nm, Vector2(cx - 220, 78), 12, Color(1, 0.7, 0.9))
 			break
