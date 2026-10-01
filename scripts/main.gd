@@ -89,7 +89,10 @@ func _ready() -> void:
 		state = S.MENU
 	if _autotest:
 		Engine.time_scale = 5.0 if _shot_path == "" else 1.0
-		start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % 3])
+		if "--tutorial" in args:
+			start_tutorial()
+		else:
+			start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % 3])
 	elif _screen_arg != "":
 		_debug_screen(_screen_arg)
 
@@ -120,15 +123,24 @@ func start_run(mode: String, char_id: String) -> void:
 	else:
 		_start_battle("battle")
 
+func start_tutorial() -> void:
+	run = RunState.new()
+	run.setup("run", "wizard")
+	paused = false
+	deck_view = false
+	_start_battle("tutorial")
+
 func _start_battle(kind: String) -> void:
 	if battle:
 		battle.dispose()
 	var diff := 1.0
-	if run.mode == "run":
+	if kind == "tutorial":
+		diff = 0.6
+	elif run.mode == "run":
 		diff = 1.0 + maxf(0.0, run.floor_idx) * 0.5
 	else:
 		diff = 1.0 + run.wave * 0.35
-	Conductor.choose_for_battle(Settings.bgm)
+	Conductor.choose_for_battle(0 if kind == "tutorial" else Settings.bgm)
 	battle = Battle.new()
 	battle.setup(run, kind, diff, ui)
 	if _autotest:
@@ -139,6 +151,12 @@ func _start_battle(kind: String) -> void:
 
 func _on_battle_done(won: bool, kind: String) -> void:
 	battle.dispose()
+	if kind == "tutorial":
+		if won:
+			Settings.tutorial_done = true
+			Settings.save_cfg()
+		goto(S.MENU)
+		return
 	run.battles += 1
 	if not won:
 		_end_run(false)
@@ -297,7 +315,7 @@ func _event_choice(e: String) -> void:
 # ---- input -----------------------------------------------------------------
 
 func _menu_ids() -> Array:
-	return ["start", "settings"] if OS.has_feature("web") else ["start", "settings", "quit"]
+	return ["start", "tutorial", "settings"] if OS.has_feature("web") else ["start", "tutorial", "settings", "quit"]
 
 func _begin() -> void:
 	# Browsers only allow audio after a user gesture, so music starts here.
@@ -500,7 +518,13 @@ func _click(id: String) -> void:
 		"abandon":
 			paused = false
 			Conductor.set_paused(false)
-			_end_run(false)
+			if battle and battle.tutorial:
+				battle.dispose()
+				goto(S.MENU)
+			else:
+				_end_run(false)
+		"tutorial":
+			start_tutorial()
 		"off-":
 			Settings.offset_ms = maxi(-200, Settings.offset_ms - 5)
 		"off+":
@@ -653,7 +677,7 @@ func _on_enter(s: S) -> void:
 	if s == S.BATTLE and battle == null:
 		state = S.MENU
 	if s == S.MENU:
-		menu_idx = 0
+		menu_idx = 1 if not Settings.tutorial_done else 0
 	if s == S.PICK:
 		pick_scroll = 0
 
@@ -745,18 +769,23 @@ func _draw_splash(c: Control) -> void:
 
 func _draw_menu(c: Control) -> void:
 	_bg(c)
-	_logo(c, 150.0)
-	ui.center(c, "ビートに乗って、デッキで生き残れ。", 280.0, 22, Color(0.85, 0.85, 1.0))
-	var labels := ["はじめる", "設定", "終了"]
+	_logo(c, 130.0)
+	ui.center(c, "ビートに乗って、デッキで生き残れ。", 262.0, 22, Color(0.85, 0.85, 1.0))
+	var names := {"start": "はじめる", "tutorial": "あそびかた", "settings": "設定", "quit": "終了"}
 	var ids := _menu_ids()
 	for i in ids.size():
-		var r := Rect2(W / 2.0 - 160.0, 330.0 + i * 70.0, 320.0, 56.0)
-		ui.button(c, ids[i], r, labels[i], true, Color(1.0, 0.8, 0.35) if i == menu_idx else Color(0.55, 0.5, 0.95), 26)
+		var r := Rect2(W / 2.0 - 160.0, 310.0 + i * 62.0, 320.0, 52.0)
+		var acc := Color(1.0, 0.8, 0.35) if i == menu_idx else Color(0.55, 0.5, 0.95)
+		if ids[i] == "tutorial" and not Settings.tutorial_done:
+			acc = Color(0.5, 1.0, 0.6)
+		ui.button(c, ids[i], r, names[ids[i]], true, acc, 24)
+		if ids[i] == "tutorial" and not Settings.tutorial_done:
+			ui.text(c, "NEW! はじめての方はここから", Vector2(r.end.x + 14.0, r.position.y + 32.0), 14, Color(0.6, 1.0, 0.7, 0.75 + 0.25 * sin(t * 5.0)))
 		if ui.is_hover(ids[i]):
 			menu_idx = i
-	_dancers(c, 560.0)
+	_dancers(c, 590.0)
 	var st: Dictionary = Settings.stats
-	ui.center(c, "プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d" % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 665.0, 14, Color(0.7, 0.7, 0.85))
+	ui.center(c, "プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d" % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 678.0, 14, Color(0.7, 0.7, 0.85))
 	ui.text(c, "CC0素材: Kenney / Joth", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
 	ui.text(c, "♪ %s - Joth (CC0)" % Conductor.TRACKS[Conductor.track_idx]["name"], Vector2(0, H - 12), 11, Color(0.6, 0.6, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, W - 16.0)
 
@@ -778,6 +807,8 @@ func _draw_mode(c: Control) -> void:
 			ui.text(c, "クリア %d回 / 最高 %d階" % [Settings.stats["wins"], Settings.stats["best_floor"]], Vector2(r.position.x, r.position.y + 350.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 		else:
 			ui.text(c, "最高 %dウェーブ" % Settings.stats["endless_best"], Vector2(r.position.x, r.position.y + 350.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	if not Settings.tutorial_done:
+		ui.center(c, "初めての方は、メニューの『あそびかた』でリズムの基本を練習できます", 600.0, 16, Color(0.6, 1.0, 0.7))
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
 
 func _draw_char(c: Control) -> void:
@@ -1123,6 +1154,7 @@ func _debug_screen(sname: String) -> void:
 			state = S.EVENT
 		"rest": state = S.REST
 		"pick": state = S.PICK
+		"tutorial": start_tutorial()
 		"end":
 			end_won = true
 			state = S.END
@@ -1146,6 +1178,10 @@ func _run_autotest(delta: float) -> void:
 		get_tree().quit()
 		return
 	if not _autotest or pending >= 0 or _shot_path != "":
+		return
+	if state == S.MENU and "--tutorial" in OS.get_cmdline_user_args():
+		print("AUTOTEST tutorial_done=%s" % Settings.tutorial_done)
+		get_tree().quit()
 		return
 	match state:
 		S.MAP:

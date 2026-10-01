@@ -100,6 +100,15 @@ var beat_pulse := 0.0
 var flash_a := 0.0
 var flash_col := Color.WHITE
 var ending := false
+var tutorial := false
+var tut_step := 0
+var tut_timer := 0.0
+var moved_dist := 0.0
+var plays := 0
+var perfects := 0
+var last_off := 0.0
+var last_off_t := 0.0
+var last_off_col := Color.WHITE
 var touch_dir := Vector2.ZERO
 var cast_name := ""
 var cast_short := ""
@@ -140,7 +149,8 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 		shield += 8
 	if run.has_relic("ring"):
 		shield += 10
-	time_left = 0.0 if kind == "boss" else (26.0 if kind == "elite" or kind == "endless" else 24.0)
+	tutorial = kind == "tutorial"
+	time_left = 0.0 if (kind == "boss" or tutorial) else (26.0 if kind == "elite" or kind == "endless" else 24.0)
 	spawning = true
 	match kind:
 		"boss":
@@ -153,6 +163,8 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 			var e := _make_enemy("elite")
 			e.pos = _edge_point()
 			enemies.append(e)
+		"tutorial":
+			banner = ""
 		"endless":
 			banner = "ウェーブ %d" % (run.wave + 1)
 		_:
@@ -327,7 +339,12 @@ func on_beat(_n: int) -> void:
 	for i in targets.size():
 		_fire_bolt((targets[i] as Enemy).pos, adm * dmg_mult(), 0.0)
 	# spawning
-	if spawning and enemies.size() < 110 and (kind != "boss" or beat_count % 2 == 0):
+	if tutorial:
+		if tut_step >= 1 and enemies.size() < 2 + tut_step and beat_count % 2 == 0:
+			var te := _make_enemy("grunt")
+			te.pos = _edge_point()
+			enemies.append(te)
+	elif spawning and enemies.size() < 110 and (kind != "boss" or beat_count % 2 == 0):
 		spawn_acc += (1 + int(diff / 2.0)) * Conductor.spb / 0.5  # same spawns per second at any BPM
 		var n := int(spawn_acc)
 		spawn_acc -= n
@@ -374,6 +391,7 @@ func update(delta: float) -> void:
 	parts = parts.filter(func(q: Part) -> bool: return q.life > 0.0)
 	banner_time = maxf(0.0, banner_time - delta)
 	cast_t = maxf(0.0, cast_t - delta)
+	last_off_t = maxf(0.0, last_off_t - delta)
 	for i in slot_anim.size():
 		slot_anim[i] = maxf(0.0, slot_anim[i] - delta)
 	shake = maxf(0.0, shake - delta * 28.0)
@@ -411,10 +429,15 @@ func _update_play(delta: float) -> void:
 	if bot_dir.is_valid():
 		dir = bot_dir.call()
 	var spd := 270.0 * float(char_def["speed"]) * (1.15 if run.has_relic("boots") else 1.0)
+	var before := player_pos
 	player_pos += dir.normalized() * spd * delta
 	player_pos = player_pos.clamp(Vector2(24, 24), Vector2(W - 24, ARENA_BOTTOM))
+	moved_dist += before.distance_to(player_pos)
 	invuln = maxf(0.0, invuln - delta)
 	blade_angle += delta * 4.5
+	if tutorial:
+		energy = max_energy
+		_tut_update(delta)
 	_trail_t -= delta
 	if dir.length() > 0.1 and _trail_t <= 0.0:
 		_trail_t = 0.05
@@ -483,6 +506,8 @@ func _update_play(delta: float) -> void:
 			_on_kill(e)
 	enemies = alive
 
+	if tutorial:
+		return
 	if kind != "boss" and spawning:
 		time_left -= delta
 		if time_left <= 0.0:
@@ -541,6 +566,12 @@ func _finish(won: bool) -> void:
 		Conductor.play_sfx("win")
 
 func damage_player(d: int) -> void:
+	if tutorial:
+		run.hp = run.max_hp
+		invuln = 0.4
+		do_shake(3.0)
+		burst(player_pos, Color(1, 0.4, 0.4), 6, 160.0, 0.4, 4.0)
+		return
 	invuln = 0.55
 	do_shake(8.0)
 	hitstop = 0.06
@@ -568,6 +599,67 @@ func hit(e: Enemy, dmg: float) -> void:
 	burst(e.pos, Color(1, 0.9, 0.6), 3, 160.0, 0.3, 3.0)
 	float_text(e.pos + Vector2(0, -e.radius - 6.0), str(int(dmg)), Color(1, 0.95, 0.7), 14 if dmg < 20.0 else 20, 0.55)
 
+# ---- tutorial --------------------------------------------------------------
+
+const TUT_STEPS := [
+	{"text": "まずは移動してみよう。
+キー: WASD / 矢印   スマホ: 画面をドラッグ", "goal": 250.0},
+	{"text": "カードを使ってみよう。
+[1]〜[5]キー / タップ。上のレーンで『丸が輪に重なる瞬間』が拍だ！", "goal": 3.0},
+	{"text": "金色の PERFECT を2回出そう！
+丸が輪に重なった瞬間に押す(判定は±0.07秒)。", "goal": 2.0},
+	{"text": "続けて当てるとコンボ！ コンボ5を目指そう。
+外すとコンボは0に戻る。ダメージもUPするよ。", "goal": 5.0},
+	{"text": "エネルギー(左上の黄色い丸)は1秒に1回復。
+左下『次のカード』で次に引くカードが分かる。", "goal": 8.0},
+	{"text": "仕上げ！ 敵を10体倒そう。
+(チュートリアル中は倒れません)", "goal": 10.0},
+]
+
+func tut_progress() -> float:
+	if tut_step >= TUT_STEPS.size():
+		return 1.0
+	var g: float = TUT_STEPS[tut_step]["goal"]
+	var v := 0.0
+	match tut_step:
+		0: v = moved_dist
+		1: v = plays
+		2: v = perfects
+		3: v = combo
+		4: v = tut_timer
+		5: v = kills
+	return clampf(v / g, 0.0, 1.0)
+
+func _tut_update(delta: float) -> void:
+	if tut_step >= TUT_STEPS.size() or ending:
+		return
+	if tut_step == 4:
+		tut_timer += delta
+	if tut_progress() >= 1.0:
+		tut_step += 1
+		Conductor.play_sfx("win")
+		flash(Color(0.6, 1.0, 0.7), 0.2)
+		if tut_step >= TUT_STEPS.size():
+			banner = "チュートリアル完了！"
+			banner_time = 2.2
+			_finish(true)
+		elif tut_step == 2:
+			combo = 0
+
+func _draw_tutorial(c: Control) -> void:
+	if tut_step >= TUT_STEPS.size():
+		return
+	var cx := W / 2.0
+	var r := Rect2(cx - 330.0, 104.0, 660.0, 92.0)
+	ui.panel(c, r, Color(0.04, 0.1, 0.06, 0.92), Color(0.5, 1.0, 0.6, 0.9))
+	ui.text(c, "STEP %d / %d" % [tut_step + 1, TUT_STEPS.size()], r.position + Vector2(14, 22), 14, Color(0.6, 1.0, 0.7))
+	c.draw_multiline_string(ui.font, r.position + Vector2(14, 46), TUT_STEPS[tut_step]["text"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 17, 2, Color(1, 1, 1))
+	ui.bar(c, Rect2(r.position.x + 14, r.end.y - 14, r.size.x - 28, 6), tut_progress(), Color(0.5, 1.0, 0.6), Color(0.1, 0.2, 0.12))
+	if tut_step >= 1 and tut_step <= 3:
+		var a := 0.5 + 0.5 * sin(elapsed * 8.0)
+		c.draw_arc(Vector2(cx, 46.0), 24.0 + 4.0 * a, 0.0, TAU, 32, Color(1, 0.9, 0.3, 0.9), 3.0)
+		ui.text(c, "ここ！", Vector2(cx - 40.0, 90.0), 14, Color(1, 0.9, 0.4, 0.6 + 0.4 * a), HORIZONTAL_ALIGNMENT_CENTER, 80.0)
+
 # ---- cards -----------------------------------------------------------------
 
 func try_play(slot: int) -> void:
@@ -583,7 +675,8 @@ func try_play(slot: int) -> void:
 		Conductor.play_sfx("miss")
 		return
 	energy -= cost
-	var a := absf(Conductor.beat_offset())
+	var so := Conductor.beat_offset()
+	var a := absf(so)
 	var grade := "MISS"
 	var gm := 0.6
 	var col := Color(0.8, 0.3, 0.3)
@@ -609,7 +702,18 @@ func try_play(slot: int) -> void:
 		float_text(player_pos + Vector2(0, -80), "アルカナ +1", Color(0.8, 0.6, 1.0), 16)
 	Conductor.play_sfx(grade.to_lower())
 	Conductor.play_sfx("card")
-	float_text(player_pos + Vector2(0, -52), grade + ("!" if grade == "PERFECT" else ""), col, 26 if grade == "PERFECT" else 20, 0.8)
+	plays += 1
+	if grade == "PERFECT":
+		perfects += 1
+	last_off = so
+	last_off_t = 1.3
+	last_off_col = col
+	var tag := ""
+	if grade == "GOOD":
+		tag = " 早め" if so < 0.0 else " 遅め"
+	elif grade == "MISS":
+		tag = " 早すぎ" if so < 0.0 else " 遅すぎ"
+	float_text(player_pos + Vector2(0, -52), grade + ("!" if grade == "PERFECT" else "") + tag, col, 26 if grade == "PERFECT" else 20, 0.8)
 	var times := 2 if (echo_pending and Cards.base_id(id) != "echo") else 1
 	if Cards.base_id(id) != "echo":
 		echo_pending = false
@@ -883,9 +987,10 @@ func draw_hud(c: Control) -> void:
 	match kind:
 		"boss": label = "BOSS戦"
 		"elite": label = "エリート"
+		"tutorial": label = "チュートリアル"
 		"endless": label = "エンドレス ウェーブ%d" % (run.wave + 1)
 		_: label = "バトル"
-	var tl := "" if (kind == "boss" or not spawning) else "  残り%.0f" % maxf(time_left, 0.0)
+	var tl := "" if (kind == "boss" or tutorial or not spawning) else "  残り%.0f" % maxf(time_left, 0.0)
 	ui.text(c, "%s%s   撃破 %d   %dG" % [label, tl, kills, run.gold], Vector2(16, 112), 14, Color(0.9, 0.9, 1.0))
 	# relics
 	for i in run.relics.size():
@@ -938,6 +1043,17 @@ func draw_hud(c: Control) -> void:
 	# perfect window band
 	var pw_px := perfect_window() * 220.0
 	c.draw_rect(Rect2(cx - pw_px, ly - 14, pw_px * 2.0, 28), Color(1.0, 0.9, 0.3, 0.08))
+
+	# where your last press landed relative to the beat (left = early, right = late)
+	if last_off_t > 0.0:
+		var mk := clampf(last_off, -0.25, 0.25) * 220.0
+		var ma := minf(1.0, last_off_t * 2.0)
+		c.draw_rect(Rect2(cx + mk - 2.0, ly - 16.0, 4.0, 32.0), Color(last_off_col, ma))
+		c.draw_colored_polygon(PackedVector2Array([Vector2(cx + mk - 6.0, ly + 24.0), Vector2(cx + mk + 6.0, ly + 24.0), Vector2(cx + mk, ly + 16.0)]), Color(last_off_col, ma))
+	ui.text(c, "早い", Vector2(cx - 316.0, ly + 36.0), 11, Color(1, 1, 1, 0.3))
+	ui.text(c, "遅い", Vector2(cx + 286.0, ly + 36.0), 11, Color(1, 1, 1, 0.3))
+	if tutorial:
+		_draw_tutorial(c)
 
 	# boss / elite bar
 	for e in enemies:
