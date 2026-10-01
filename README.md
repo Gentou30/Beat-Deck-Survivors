@@ -5,3 +5,5 @@ Vampire-Survivors-style swarm battles + Slay-the-Spire-style deck/map run + rhyt
 - Controls: WASD/arrows (or drag on touch) to move; cards 1-5 / click / tap, on the beat.
 - Dev notes: see CLAUDE.md. Web build: `./tools/export_web.ps1`. GitHub Pages deploys automatically from `main` (.github/workflows/deploy-pages.yml).
 - Credits: assets/CREDITS.md (Kenney CC0 art/SFX, Joth CC0 music, DotGothic16 OFL font).
+
+Play online: https://gentou30.github.io/Beat-Deck-Survivors/
