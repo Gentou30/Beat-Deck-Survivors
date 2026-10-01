@@ -13,6 +13,22 @@ const TILE_DIR := "res://assets/kenney_tiny_dungeon/tile_%04d.png"
 const TILE_SWORD := 104
 const GOOD_BASE := 0.14
 const PERFECT_BASE := 0.07
+const PERKS := {
+	"dmg": {"name": "パワーアップ", "desc": "与ダメージ+12%", "color": Color(1.0, 0.5, 0.4)},
+	"bolt": {"name": "マルチショット", "desc": "自動弾が+1発", "color": Color(1.0, 0.85, 0.4)},
+	"pierce": {"name": "貫通弾", "desc": "自動弾が+1体貫通", "color": Color(0.7, 0.95, 1.0)},
+	"speed": {"name": "俊足", "desc": "移動速度+10%", "color": Color(0.6, 0.9, 0.6)},
+	"regen": {"name": "エネルギー活性", "desc": "エネルギー回復+20%", "color": Color(1.0, 0.9, 0.3)},
+	"magnet": {"name": "マグネット", "desc": "ドロップの吸引範囲+60%", "color": Color(0.7, 0.8, 1.0)},
+	"heal": {"name": "リカバリー", "desc": "HPを12回復", "color": Color(0.4, 0.9, 0.5)},
+	"shield": {"name": "プロテクト", "desc": "シールド+15", "color": Color(0.5, 0.7, 1.0)},
+	"fever": {"name": "フィーバー加速", "desc": "フィーバーゲージの蓄積+25%", "color": Color(1.0, 0.8, 0.2)},
+	"combo": {"name": "コンボキープ", "desc": "MISSしてもコンボが半分残る", "color": Color(0.9, 0.6, 1.0)},
+	"nova": {"name": "オートノヴァ", "desc": "8拍ごとに小ノヴァが自動発動", "color": Color(0.95, 0.5, 0.8)},
+	"luck": {"name": "金運", "desc": "アイテムのドロップ率+40%", "color": Color(1.0, 0.85, 0.3)},
+}
+const XP_VALUE := {"grunt": 1.0, "fast": 1.0, "bomber": 1.0, "splitter": 1.5, "shooter": 2.0, "charger": 2.0, "tank": 3.0, "elite": 15.0, "boss": 30.0, "loot": 10.0}
+
 const BOSS_NAMES := {"bass": "ベースデーモン", "drum": "ドラムメイジ", "metronome": "メトロノーム・ジャイアント", "maestro": "マエストロ"}
 const TILE_DIR2 := "res://assets/kenney_tiny_battle/tile_%04d.png"
 const ACT2_TILES := {"grunt": 160, "fast": 154, "tank": 152, "shooter": 153, "charger": 150, "splitter": 155, "elite": 158, "bomber": 173}
@@ -40,6 +56,7 @@ class Enemy:
 	var boss_id := ""
 	var thorn_cd := 0.0
 	var bphase := 0
+	var life_t := 0.0
 
 class Bolt:
 	var pos := Vector2.ZERO
@@ -49,6 +66,14 @@ class Bolt:
 	var color := Color(1.0, 0.85, 0.5)
 	var pierce := 0
 	var hit_ids: Array = []
+
+class Pickup:
+	var kind := "xp"  # xp | gold | heart | energy | fever
+	var pos := Vector2.ZERO
+	var vel := Vector2.ZERO
+	var value := 1.0
+	var age := 0.0
+	var magnet := false
 
 class EShot:
 	var pos := Vector2.ZERO
@@ -155,6 +180,28 @@ var facing := 1.0
 var _muffled := false
 var started := false
 var _last_play_ms := -1000
+var pickups: Array[Pickup] = []
+var xp := 0.0
+var level := 1
+var pending_levels := 0
+var levelup_active := false
+var levelup_choices: Array = []
+var loot_gold := 0
+var bonus_potion := false
+var loot_beat := -1
+var loot_spawned := false
+var _last_heart_t := -100.0
+var perk_dmg := 0.0
+var perk_bolts := 0
+var perk_pierce := 0
+var perk_speed := 0.0
+var perk_energy := 0.0
+var perk_magnet := 0.0
+var perk_fever := 0.0
+var perk_luck := 0
+var perk_nova := 0
+var perk_combo_keep := false
+var perk_taken: Dictionary = {}
 var _last_potion_ms := -1000
 const LANE_X := 420.0
 var count_n := 0
@@ -225,6 +272,8 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 			banner = "バトル開始"
 	banner_time = 2.2
 	intro_banner = banner
+	if not tutorial and kind != "boss" and randf() < 0.45:
+		loot_beat = 14 + randi() % 30
 	Conductor.guide = true
 	Conductor.force_clap = true  # 4-beat countdown claps always sound
 	_beat_cb = Callable(self, "on_beat")
@@ -251,7 +300,7 @@ func good_window() -> float:
 
 func dmg_mult() -> float:
 	var per := (0.03 if run.has_relic("amp") else 0.02) + (0.01 if run.char_id == "drummer" else 0.0)
-	return (2.0 if frenzy_beats > 0 else 1.0) * (1.5 if fever_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per)
+	return (2.0 if frenzy_beats > 0 else 1.0) * (1.5 if fever_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per + perk_dmg)
 
 const THEMES := [
 	{"floor": Color(0.45, 0.85, 1.9), "line": Color(0.6, 0.5, 1.0), "tint": Color(0.4, 0.3, 0.9)},
@@ -276,7 +325,7 @@ func fever_max() -> float:
 func _add_fever(v: float) -> void:
 	if fever_beats > 0:
 		return
-	fever_gauge = minf(fever_max(), fever_gauge + v)
+	fever_gauge = minf(fever_max(), fever_gauge + v * (1.0 + perk_fever))
 	if fever_gauge >= fever_max():
 		_start_fever()
 
@@ -422,6 +471,13 @@ func _make_enemy(k: String) -> Enemy:
 			e.dmg = 7 + int(d)
 			e.color = Color(1.0, 0.6, 0.4)
 			e.tex = tex(123)
+		"loot":
+			e.max_hp = 40.0 + 14.0 * d
+			e.speed = 150.0
+			e.radius = 14.0
+			e.dmg = 0
+			e.color = Color(1.0, 0.85, 0.3)
+			e.tex = tex(85)
 		"bomber":
 			e.max_hp = 12.0 + 5.0 * d
 			e.speed = 105.0 + 4.0 * d
@@ -563,7 +619,7 @@ func on_beat(_n: int) -> void:
 		return
 	for i in 4:
 		_lit[Vector2i(randi() % 20, randi() % 8)] = 1.0
-	if ending:
+	if ending or levelup_active:
 		return
 	ring(player_pos, 70.0, Color(1, 1, 1, 0.25), 0.4)
 	for dl in delayed:
@@ -596,20 +652,25 @@ func on_beat(_n: int) -> void:
 		frenzy_beats -= 1
 	if slow_beats > 0:
 		slow_beats -= 1
-	energy_t += Conductor.spb  # 1 energy per second regardless of BPM
-	if energy_t >= 1.0:
-		energy_t -= 1.0
-		energy = mini(max_energy, energy + 1)
+	if perk_nova > 0 and beat_count % 8 == 0:
+		for pn in perk_nova:
+			_mini_nova()
+	if loot_beat >= 0 and not loot_spawned and beat_count >= loot_beat and spawning:
+		loot_spawned = true
+		var lg := _make_enemy("loot")
+		lg.pos = _edge_point()
+		enemies.append(lg)
+		float_text(Vector2(W / 2.0, 150.0), "ゴールドゴブリン出現！", Color(1.0, 0.85, 0.3), 22, 1.4)
+		Conductor.play_sfx("open")
 	if fort > 0 and beat_count % 4 == 0:
 		shield = mini(60, shield + fort)
 		float_text(player_pos + Vector2(0, -34), "+%d" % fort, Color(0.5, 0.7, 1.0))
 	# auto weapon
-	var targets := nearest_enemies(2 if run.char_id == "ranger" else 1)
+	var targets := nearest_enemies((2 if run.char_id == "ranger" else 1) + perk_bolts)
 	var adm := 4.0 + res_bonus + (3.0 if run.has_relic("sword") else 0.0)
 	for i in targets.size():
 		var ab := _fire_bolt((targets[i] as Enemy).pos, adm * dmg_mult(), 0.0)
-		if run.has_relic("scope"):
-			ab.pierce = 2
+		ab.pierce = perk_pierce + (2 if run.has_relic("scope") else 0)
 	# spawning
 	if tutorial:
 		if tut_step >= 1 and enemies.size() < 2 + tut_step and beat_count % 2 == 0:
@@ -785,6 +846,8 @@ func update(delta: float) -> void:
 	if hitstop > 0.0:
 		hitstop -= delta
 		return
+	if levelup_active:
+		return
 	elapsed += delta
 	if done:
 		return
@@ -817,7 +880,7 @@ func _update_play(delta: float) -> void:
 	var dir := move_dir()
 	if bot_dir.is_valid():
 		dir = bot_dir.call()
-	var spd := 270.0 * float(char_def["speed"]) * (1.15 if run.has_relic("boots") else 1.0)
+	var spd := 270.0 * float(char_def["speed"]) * (1.15 if run.has_relic("boots") else 1.0) * (1.0 + perk_speed)
 	var before := player_pos
 	player_vel = dir.normalized() * spd if dir.length() > 0.05 else Vector2.ZERO
 	if absf(dir.x) > 0.2:
@@ -836,6 +899,14 @@ func _update_play(delta: float) -> void:
 	if tutorial:
 		energy = max_energy
 		_tut_update(delta)
+	elif energy < max_energy:
+		energy_t += delta * (1.0 + perk_energy)  # continuous: 1 energy per second
+		if energy_t >= 1.0:
+			energy_t -= 1.0
+			energy += 1
+	else:
+		energy_t = 0.0
+	_update_pickups(delta)
 	_trail_t -= delta
 	if dir.length() > 0.1 and _trail_t <= 0.0:
 		_trail_t = 0.05
@@ -858,6 +929,14 @@ func _update_play(delta: float) -> void:
 				mv = (to_p + to_p.orthogonal() * sin(elapsed * 6.0 + e.phase) * 0.8).normalized()
 			"shooter":
 				mv = _keep_distance(e, to_p, 330.0, 230.0)
+			"loot":
+				e.life_t += delta
+				mv = (-to_p + to_p.orthogonal() * sin(elapsed * 3.0 + e.phase) * 0.6).normalized()
+				if e.pos.x < 40.0 or e.pos.x > W - 40.0 or e.pos.y < 40.0 or e.pos.y > ARENA_BOTTOM - 20.0:
+					mv = (Vector2(W / 2.0, 240.0) - e.pos).normalized()
+				if e.life_t > 12.0:
+					e.hp = 0.0
+					e.max_hp = -1.0  # escaped marker
 			"charger":
 				if e.tele > 0:
 					moving = false
@@ -878,7 +957,7 @@ func _update_play(delta: float) -> void:
 		if moving:
 			e.pos += mv * spd_e * slow * delta
 			e.pos = e.pos.clamp(Vector2(-70, -70), Vector2(W + 70, ARENA_BOTTOM + 70))
-		if e.pos.distance_to(player_pos) < e.radius + 14.0:
+		if e.kind != "loot" and e.pos.distance_to(player_pos) < e.radius + 14.0:
 			if thorns > 0 and e.thorn_cd <= 0.0:
 				hit(e, float(thorns))
 				e.thorn_cd = 0.4
@@ -968,8 +1047,13 @@ func _update_play(delta: float) -> void:
 		_finish(true)
 
 func _on_kill(e: Enemy) -> void:
+	if e.kind == "loot" and e.max_hp < 0.0:
+		float_text(e.pos, "逃げられた…", Color(0.8, 0.8, 0.8), 16, 1.0)
+		return
 	kills += 1
 	run.kills += 1
+	if not tutorial:
+		_drop(e)
 	if fxs.size() < 150:
 		var sf := Fx.new()
 		sf.kind = "sprite"
@@ -1018,6 +1102,144 @@ func _on_kill(e: Enemy) -> void:
 			aura_count = 0
 			_heal(1)
 
+func _luck() -> float:
+	return (1.0 + (0.5 if run.has_relic("charm") else 0.0) + 0.4 * perk_luck)
+
+func _add_pickup(kind: String, p: Vector2, value: float) -> void:
+	if pickups.size() >= 160:
+		return
+	var pk := Pickup.new()
+	pk.kind = kind
+	pk.pos = p
+	pk.vel = Vector2.from_angle(randf() * TAU) * (60.0 + randf() * 90.0)
+	pk.value = value
+	pickups.append(pk)
+
+func _drop(e: Enemy) -> void:
+	var xv: float = XP_VALUE.get(e.kind, 1.0)
+	if pickups.size() >= 120 and xv < 3.0:
+		_gain_xp(xv)  # don't clutter the screen: grant directly
+	else:
+		_add_pickup("xp", e.pos, xv)
+	var lk := _luck()
+	match e.kind:
+		"loot":
+			for i in 7:
+				_add_pickup("gold", e.pos, 3.0)
+			if randf() < 0.4:
+				bonus_potion = true
+				float_text(e.pos + Vector2(0, -30), "ポーション入手！", Color(0.6, 1.0, 0.8), 18, 1.4)
+			ring(e.pos, 100.0, Color(1.0, 0.85, 0.3), 0.5)
+		"elite", "boss":
+			for i in (4 if e.kind == "elite" else 10):
+				_add_pickup("gold", e.pos, 2.0)
+			_add_pickup("heart", e.pos, 4.0)
+		_:
+			if randf() < 0.07 * lk:
+				_add_pickup("gold", e.pos, 1.0)
+			if randf() < 0.022 * lk and elapsed - _last_heart_t > 8.0 and run.hp < run.max_hp:
+				_last_heart_t = elapsed
+				_add_pickup("heart", e.pos, 2.0)
+			if randf() < 0.035 * lk and energy < max_energy:
+				_add_pickup("energy", e.pos, 0.5)
+			if randf() < 0.045 * lk and fever_beats == 0:
+				_add_pickup("fever", e.pos, 0.35)
+
+func _magnet_range() -> float:
+	return 80.0 * (1.0 + perk_magnet) * (2.0 if run.has_relic("magnet") else 1.0)
+
+func _update_pickups(delta: float) -> void:
+	var mr := _magnet_range()
+	for pk in pickups:
+		pk.age += delta
+		var d := pk.pos.distance_to(player_pos)
+		if not pk.magnet and d < mr:
+			pk.magnet = true
+		if pk.magnet:
+			pk.pos += (player_pos - pk.pos).normalized() * minf(d, (420.0 + pk.age * 30.0) * delta)
+		else:
+			pk.pos += pk.vel * delta
+			pk.vel *= 0.92
+		if d < 20.0:
+			_collect(pk)
+			pk.age = 9999.0
+		elif pk.kind != "xp" and pk.age > 14.0 and not pk.magnet:
+			pk.age = 9999.0
+	pickups = pickups.filter(func(p: Pickup) -> bool: return p.age < 9000.0)
+
+func _collect(pk: Pickup) -> void:
+	match pk.kind:
+		"xp":
+			_gain_xp(pk.value)
+			Conductor.play_sfx("tick", 1.0 + minf(level, 8) * 0.03 + randf() * 0.1)
+		"gold":
+			loot_gold += int(pk.value)
+			float_text(pk.pos, "+%dG" % int(pk.value), Color(1.0, 0.85, 0.3), 13, 0.6)
+			Conductor.play_sfx("tick", 1.5 + randf() * 0.2)
+		"heart":
+			_heal(int(pk.value))
+			Conductor.play_sfx("tick", 0.8)
+		"energy":
+			energy_t += pk.value
+			if energy_t >= 1.0 and energy < max_energy:
+				energy_t -= 1.0
+				energy += 1
+			float_text(pk.pos, "+エネルギー", Color(1.0, 0.9, 0.3), 13, 0.7)
+			Conductor.play_sfx("tick", 1.3)
+		"fever":
+			_add_fever(pk.value)
+			Conductor.play_sfx("tick", 1.7)
+
+func _xp_need() -> float:
+	return 9.0 + level * 6.0
+
+func _gain_xp(v: float) -> void:
+	xp += v
+	while xp >= _xp_need():
+		xp -= _xp_need()
+		level += 1
+		pending_levels += 1
+	if pending_levels > 0 and not levelup_active and not ending:
+		_open_levelup()
+
+func _open_levelup() -> void:
+	var ids: Array = PERKS.keys()
+	ids.shuffle()
+	levelup_choices = ids.slice(0, 3)
+	levelup_active = true
+	flash(Color(1.0, 0.95, 0.5), 0.35)
+	ring(player_pos, 200.0, Color(1.0, 0.9, 0.4), 0.6)
+	burst(player_pos, Color(1.0, 0.9, 0.4), 40, 380.0, 0.7, 5.0)
+	Conductor.play_sfx("big")
+
+func pick_perk(i: int) -> void:
+	if not levelup_active or i < 0 or i >= levelup_choices.size():
+		return
+	var id: String = levelup_choices[i]
+	perk_taken[id] = int(perk_taken.get(id, 0)) + 1
+	match id:
+		"dmg": perk_dmg += 0.12
+		"bolt": perk_bolts += 1
+		"pierce": perk_pierce += 1
+		"speed": perk_speed += 0.10
+		"regen": perk_energy += 0.20
+		"magnet": perk_magnet += 0.60
+		"heal": _heal(12)
+		"shield": shield = mini(80, shield + 15)
+		"fever": perk_fever += 0.25
+		"combo": perk_combo_keep = true
+		"nova": perk_nova += 1
+		"luck": perk_luck += 1
+	var pcol: Color = PERKS[id]["color"]
+	ring(player_pos, 90.0, pcol, 0.5)
+	burst(player_pos, pcol, 24, 260.0, 0.5, 4.0)
+	float_text(player_pos + Vector2(0, -70), String(PERKS[id]["name"]), pcol, 20, 1.2)
+	Conductor.play_sfx("win")
+	pending_levels -= 1
+	levelup_active = false
+	if pending_levels > 0:
+		_open_levelup()
+
 func _heal(n: int) -> void:
 	run.heal(n)
 	float_text(player_pos + Vector2(0, -30), "+%d" % n, Color(0.4, 1.0, 0.5))
@@ -1031,6 +1253,8 @@ func _finish(won: bool) -> void:
 	spawning = false
 	bolts.clear()
 	slams.clear()
+	pickups.clear()
+	levelup_active = false
 	eshots.clear()
 	delayed.clear()
 	for e in enemies:
@@ -1088,7 +1312,7 @@ func hit(e: Enemy, dmg: float) -> void:
 # ---- potions ---------------------------------------------------------------
 
 func use_potion(i: int) -> void:
-	if ending or i < 0 or i >= run.potions.size() or not started:
+	if ending or levelup_active or i < 0 or i >= run.potions.size() or not started:
 		return
 	var pnow := Time.get_ticks_msec()
 	if pnow - _last_potion_ms < 200 or pnow - _last_play_ms < 150:
@@ -1186,7 +1410,7 @@ func _draw_tutorial(c: Control) -> void:
 # ---- cards -----------------------------------------------------------------
 
 func try_play(slot: int) -> void:
-	if ending or not started:
+	if ending or not started or levelup_active:
 		return
 	# Only one card at a time: ignore presses that arrive together (keys held at once).
 	var now_ms := Time.get_ticks_msec()
@@ -1232,7 +1456,7 @@ func try_play(slot: int) -> void:
 		burst(player_pos, col, 10, 200.0, 0.4, 4.0)
 		_add_fever(0.4)
 	else:
-		combo = 0
+		combo = combo / 2 if perk_combo_keep else 0
 		fever_gauge *= 0.5
 	if grade != "MISS" and run.char_id == "wizard" and combo > 0 and combo % 5 == 0:
 		energy = mini(max_energy, energy + 1)
@@ -1244,6 +1468,11 @@ func try_play(slot: int) -> void:
 	Conductor.play_sfx(grade.to_lower(), pitch)
 	Conductor.play_sfx("card", randf_range(0.94, 1.08))
 	plays += 1
+	if grade != "MISS" and combo in [10, 20, 30, 40]:
+		shield = mini(80, shield + 6)
+		float_text(player_pos + Vector2(0, -110), "COMBO x%d!  +6 シールド" % combo, Color(1.0, 0.9, 0.3), 20, 1.3)
+		flash(Color(1, 0.9, 0.4), 0.25)
+		Conductor.play_sfx("big")
 	Settings.stats["best_combo"] = maxi(Settings.stats["best_combo"], combo)
 	if combo >= 10:
 		Settings.unlock("combo10")
@@ -1502,6 +1731,37 @@ func draw_world(c: Node2D) -> void:
 			c.draw_arc(e.pos, e.radius + 5.0, 0.0, TAU, 48, Color(e.color, 0.8), 3.0)
 		if e.spawn_t > 0.0:
 			c.draw_arc(e.pos, 22.0 * (1.0 + e.spawn_t * 3.0), 0.0, TAU, 20, Color(1, 0.4, 0.4, 0.6), 2.0)
+		elif e.kind != "boss" and e.max_hp > 0.0 and (e.hp < e.max_hp - 0.01 or e.kind == "tank" or e.kind == "elite" or e.kind == "loot"):
+			var bw := maxf(20.0, e.radius * 2.0)
+			var bx := e.pos.x - bw / 2.0
+			var by2 := e.pos.y - e.radius * 1.6 - 5.0
+			c.draw_rect(Rect2(bx - 1.0, by2 - 1.0, bw + 2.0, 5.0), Color(0, 0, 0, 0.7))
+			c.draw_rect(Rect2(bx, by2, bw * clampf(e.hp / e.max_hp, 0.0, 1.0), 3.0), Color(1.0, 0.85, 0.3) if e.kind == "loot" else Color(0.95, 0.3, 0.3))
+		if e.kind == "loot":
+			c.draw_arc(e.pos, e.radius + 6.0 + 2.0 * sin(elapsed * 8.0), 0.0, TAU, 24, Color(1.0, 0.85, 0.3, 0.9), 2.0)
+	for pk in pickups:
+		var bob := sin(elapsed * 6.0 + pk.pos.x * 0.05) * 2.0
+		var pc := Color(0.4, 0.8, 1.0)
+		var psz := 5.0
+		match pk.kind:
+			"gold":
+				pc = Color(1.0, 0.85, 0.3)
+				psz = 6.0
+			"heart":
+				pc = Color(1.0, 0.4, 0.5)
+				psz = 7.0
+			"energy":
+				pc = Color(1.0, 0.95, 0.4)
+				psz = 6.0
+			"fever":
+				pc = Color(1.0, 0.6, 1.0)
+				psz = 6.0
+			_:
+				psz = 4.0 + minf(pk.value, 6.0) * 0.5
+		var pp := pk.pos + Vector2(0, bob)
+		var fade := 1.0 if (pk.kind == "xp" or pk.age < 11.0 or pk.magnet) else (0.4 + 0.6 * absf(sin(elapsed * 14.0)))
+		c.draw_colored_polygon(PackedVector2Array([pp + Vector2(0, -psz), pp + Vector2(psz, 0), pp + Vector2(0, psz), pp + Vector2(-psz, 0)]), Color(pc, fade))
+		c.draw_circle(pp + Vector2(-1, -1), 1.6, Color(1, 1, 1, 0.8 * fade))
 	if blade_beats > 0:
 		for i in blade_n:
 			var a := blade_angle + i * TAU / blade_n
@@ -1568,6 +1828,14 @@ func draw_glow(c: Node2D) -> void:
 		c.draw_circle(sh.pos, 16.0, Color(1.0, 0.25, 0.45, 0.22))
 		c.draw_circle(sh.pos, 8.0, Color(1.0, 0.45, 0.6, 0.6))
 		c.draw_circle(sh.pos, 4.0, Color(1, 0.9, 0.95, 0.95))
+	for pk in pickups:
+		var gc := Color(0.4, 0.8, 1.0, 0.18)
+		match pk.kind:
+			"gold": gc = Color(1.0, 0.85, 0.3, 0.22)
+			"heart": gc = Color(1.0, 0.4, 0.5, 0.22)
+			"energy": gc = Color(1.0, 0.95, 0.4, 0.22)
+			"fever": gc = Color(1.0, 0.6, 1.0, 0.22)
+		c.draw_circle(pk.pos, 12.0, gc)
 	for q in parts:
 		var k := q.life / q.max_life
 		var sz := Vector2(q.size, q.size) * k
@@ -1603,8 +1871,11 @@ func _draw_mini_status(c: Node2D) -> void:
 	var pw := 7.0
 	var total := max_energy * (pw + 2.0) - 2.0
 	for i in max_energy:
-		var on := i < energy
-		c.draw_rect(Rect2(player_pos.x - total / 2.0 + i * (pw + 2.0), by + 10, pw, 5), Color(1.0, 0.85, 0.3, 0.95) if on else Color(0.3, 0.27, 0.2, 0.7))
+		var px0 := player_pos.x - total / 2.0 + i * (pw + 2.0)
+		c.draw_rect(Rect2(px0, by + 10, pw, 5), Color(0.3, 0.27, 0.2, 0.7))
+		var fill := 1.0 if i < energy else (energy_t if i == energy else 0.0)
+		if fill > 0.0:
+			c.draw_rect(Rect2(px0, by + 10, pw * fill, 5), Color(1.0, 0.85, 0.3, 0.95))
 
 ## Card name + short effect text above the player after playing a card.
 func _draw_cast(c: Node2D) -> void:
@@ -1644,10 +1915,21 @@ func draw_hud(c: Control) -> void:
 	if shield > 0:
 		ui.bar(c, Rect2(62, 40, 236, 8), minf(1.0, shield / 40.0), Color(0.45, 0.65, 1.0), Color(0.1, 0.1, 0.2))
 		ui.text(c, Loc.t("シールド %d") % shield, Vector2(66, 62), 12, Color(0.6, 0.75, 1.0))
-	for i in max_energy:
-		var on := i < energy
-		var cx := 72.0 + i * 26.0
-		c.draw_circle(Vector2(cx, 80), 10.0 + (2.0 * beat_pulse if on else 0.0), Color(1.0, 0.85, 0.3) if on else Color(0.25, 0.22, 0.15))
+	# continuous energy gauge (fills smoothly, 1 energy per second)
+	var ef := float(energy) + (energy_t if energy < max_energy else 0.0)
+	var gx := 62.0
+	var gw := 236.0
+	c.draw_rect(Rect2(gx, 66.0, gw, 12.0), Color(0.15, 0.12, 0.05, 0.95))
+	c.draw_rect(Rect2(gx, 66.0, gw * ef / max_energy, 12.0), Color(1.0, 0.85, 0.3) if energy < max_energy else Color(1.0, 0.95, 0.5 + 0.3 * beat_pulse))
+	for ti in range(1, max_energy):
+		var tx := gx + gw * ti / max_energy
+		c.draw_line(Vector2(tx, 66.0), Vector2(tx, 78.0), Color(0, 0, 0, 0.7), 2.0)
+	c.draw_rect(Rect2(gx, 66.0, gw, 12.0), Color(1, 1, 1, 0.3), false, 1.0)
+	ui.text(c, "%.1f / %d" % [ef, max_energy], Vector2(gx + gw + 4.0, 77.0), 11, Color(1.0, 0.9, 0.5), HORIZONTAL_ALIGNMENT_LEFT, 60.0)
+	# XP bar
+	if not tutorial:
+		ui.bar(c, Rect2(gx, 84.0, gw, 6.0), xp / _xp_need(), Color(0.4, 0.8, 1.0), Color(0.05, 0.1, 0.18))
+		ui.text(c, "Lv %d" % level, Vector2(14.0, 91.0), 13, Color(0.6, 0.9, 1.0))
 	var label := ""
 	match kind:
 		"boss": label = "BOSS戦"
@@ -1656,7 +1938,7 @@ func draw_hud(c: Control) -> void:
 		"endless": label = Loc.t("エンドレス ウェーブ%d") % (run.wave + 1)
 		_: label = "バトル"
 	var tl := "" if (kind == "boss" or tutorial or not spawning) else Loc.t("  残り%.0f") % maxf(time_left, 0.0)
-	ui.text(c, Loc.t("%s%s   撃破 %d   %dG") % [label, tl, kills, run.gold], Vector2(16, 112), 14, Color(0.9, 0.9, 1.0))
+	ui.text(c, Loc.t("%s%s   撃破 %d   %dG") % [label, tl, kills, run.gold + loot_gold], Vector2(16, 112), 14, Color(0.9, 0.9, 1.0))
 	# relics
 	for i in run.relics.size():
 		ui.relic_icon(c, run.relics[i], Rect2(10 + i * 30, 128, 26, 26), "relic:%d" % i)
@@ -1796,3 +2078,24 @@ func draw_hud(c: Control) -> void:
 		ui.text(c, "(なし)", Vector2(20, H - 120), 14, Color(0.7, 0.7, 0.8))
 	ui.text(c, Loc.t("山札 %d") % deck.draw_pile.size(), Vector2(20, H - 66), 16, Color(0.8, 0.8, 0.95))
 	ui.text(c, Loc.t("捨て札 %d") % deck.discard_pile.size(), Vector2(20, H - 42), 16, Color(0.8, 0.8, 0.95))
+
+func draw_levelup(c: Control) -> void:
+	if not levelup_active:
+		return
+	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
+	var pulse := 0.5 + 0.5 * sin(elapsed * 6.0 + Time.get_ticks_msec() * 0.006)
+	ui.text(c, "LEVEL UP!  Lv %d" % level, Vector2(0, 150), 46, Color(1.0, 0.92, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
+	ui.text(c, "強化を1つ選ぼう(この戦闘のみ有効)  [1-3 / 矢印+Enter]" if pending_levels <= 1 else Loc.t("強化を1つ選ぼう (あと%d回)") % pending_levels, Vector2(0, 186), 18, Color(0.9, 0.9, 1.0), HORIZONTAL_ALIGNMENT_CENTER, W)
+	for i in levelup_choices.size():
+		var id: String = levelup_choices[i]
+		var pd: Dictionary = PERKS[id]
+		var pcol: Color = pd["color"]
+		var r := Rect2(W / 2.0 - 450.0 + i * 310.0, 230.0, 290.0, 240.0)
+		ui.button(c, "perk:%d" % i, r, "", true, pcol)
+		c.draw_rect(Rect2(r.position, Vector2(r.size.x, 6.0)), Color(pcol, 0.6 + 0.4 * pulse))
+		ui.text(c, "[%d]" % (i + 1), r.position + Vector2(12, 30), 18, Color(1, 1, 1, 0.6))
+		ui.text(c, String(pd["name"]), r.position + Vector2(0, 100), 28, pcol.lerp(Color.WHITE, 0.3), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		ui.dms(c, r.position + Vector2(18, 150), String(pd["desc"]), HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 36.0, 18, 3, Color(0.95, 0.95, 1.0))
+		var have := int(perk_taken.get(id, 0))
+		if have > 0:
+			ui.text(c, "所持 x%d" % have, r.position + Vector2(0, 222), 13, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)

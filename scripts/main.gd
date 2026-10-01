@@ -243,7 +243,7 @@ func _on_battle_done(won: bool, kind: String) -> void:
 		base = 32 + randi() % 10
 	elif kind == "boss":
 		base = 70 + randi() % 20
-	base += battle.kills / 15
+	base += battle.kills / 30 + battle.loot_gold
 	reward_gold = run.gain_gold(base)
 	reward_relic = ""
 	if kind == "elite" or act_clear:
@@ -251,7 +251,7 @@ func _on_battle_done(won: bool, kind: String) -> void:
 		if not r.is_empty():
 			reward_relic = r[0]
 	reward_potion = ""
-	if kind == "elite" or kind == "boss" or randf() < 0.35:
+	if kind == "elite" or kind == "boss" or battle.bonus_potion or randf() < 0.35:
 		reward_potion = Potions.random_id()
 	reward_cards = Cards.random_choices(3)
 	reward_picked = -1
@@ -510,7 +510,7 @@ func _pad_input(event: InputEvent) -> void:
 			_axis_state[key] = false
 
 func _in_battle_play() -> bool:
-	return state == S.BATTLE and battle != null and not paused
+	return state == S.BATTLE and battle != null and not paused and not battle.levelup_active
 
 func _pad_button(idx: int) -> void:
 	if _in_battle_play():
@@ -697,7 +697,7 @@ func _kb_nav_state() -> bool:
 	if sys_menu or sys_confirm or deck_view:
 		return true
 	if state == S.BATTLE:
-		return paused
+		return paused or (battle != null and battle.levelup_active)
 	return state in [S.MENU, S.MODE, S.SETTINGS, S.RECORDS, S.REWARD, S.REST, S.PICK, S.SHOP, S.EVENT, S.TREASURE, S.END]
 
 func _open_sys_menu() -> void:
@@ -799,6 +799,9 @@ func _key(k: int) -> void:
 			var act := Settings.action_for_key(k)
 			if k == KEY_ESCAPE or act == "pause":
 				_toggle_pause()
+			elif battle.levelup_active:
+				if act.begins_with("card"):
+					battle.pick_perk(int(act.substr(4)) - 1)
 			elif act.begins_with("card"):
 				battle.try_play(int(act.substr(4)) - 1)
 			elif act.begins_with("potion"):
@@ -870,6 +873,10 @@ func _click(id: String) -> void:
 	if id.begins_with("hand:"):
 		if not paused:
 			battle.try_play(int(id.substr(5)))
+		return
+	if id.begins_with("perk:"):
+		if battle:
+			battle.pick_perk(int(id.substr(5)))
 		return
 	if id.begins_with("potion:"):
 		if state == S.BATTLE and not paused and battle:
@@ -1233,6 +1240,7 @@ func draw_hud(c: Control) -> void:
 		S.BATTLE:
 			if battle:
 				battle.draw_hud(c)
+				battle.draw_levelup(c)
 				_relic_tips(c)
 				if paused:
 					_draw_pause(c)
@@ -1254,11 +1262,6 @@ func draw_hud(c: Control) -> void:
 	_draw_toasts(c)
 	if state == S.BATTLE and not paused:
 		_draw_joystick(c)
-	var ws := DisplayServer.window_get_size()
-	if ws.y > ws.x and state != S.SPLASH:
-		c.draw_rect(Rect2(0, 0, W, H), Color(0.03, 0.02, 0.08, 0.95))
-		ui.center(c, "画面を横向きにしてください", 330.0, 44, Color(1, 0.9, 0.5))
-		ui.center(c, "(スマホは横向き+全画面がおすすめ)", 390.0, 22, Color(0.8, 0.8, 0.95))
 	if fade > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, clampf(fade, 0.0, 1.0)))
 
@@ -1767,7 +1770,7 @@ func _draw_upgrade_preview(c: Control) -> void:
 	ui.card(c, id, Rect2(lx, 165.0, 240.0, 300.0), "", true, false)
 	ui.card(c, up_id, Rect2(rx, 165.0, 240.0, 300.0), "", true, true)
 	c.draw_rect(Rect2(rx, 165.0, 240.0, 300.0).grow(5.0), Color(0.5, 1.0, 0.6, 0.6 + 0.4 * sin(t * 6.0)), false, 4.0)
-	ui.text(c, "▶", Vector2(W / 2.0 - 30.0, 330.0), 60, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 60.0)
+	ui.arrow(c, Vector2(W / 2.0, 315.0), 1, 70.0, Color(1, 0.9, 0.4))
 	# stat diff list
 	var y := 490.0
 	var lines: Array = []
@@ -2023,12 +2026,16 @@ func _run_autotest(delta: float) -> void:
 		print("AUTOPROGRESS t=%d state=%s act=%d wave=%d floor=%d hp=%d kills=%d" % [_last_prog, S.keys()[state], run.act, run.wave, run.floor_idx, run.hp, run.kills])
 	if _shot_path != "" and state == S.BATTLE and battle and not _shot_played and _autotest_t > 5.6:
 		_shot_played = true
+		if _screen_arg == "levelup":
+			battle._gain_xp(40.0)
+			for i in 12:
+				battle._add_pickup(["xp", "gold", "heart", "energy", "fever"][i % 5], battle.player_pos + Vector2(randf_range(-150, 150), randf_range(-90, 90)), 2.0)
 		for i in 5:
 			var id := battle.deck.hand[i]
 			if id != "" and battle.energy >= int(Cards.def(id)["cost"]):
 				battle.try_play(i)
 				break
-	if _shot_path != "" and _autotest_t > (7.0 if (_screen_arg in ["boss", "elite", "battle", "act2", "maestro"] or _screen_arg.begins_with("boss_")) else 1.0) and pending < 0:
+	if _shot_path != "" and _autotest_t > (7.0 if (_screen_arg in ["boss", "elite", "battle", "act2", "maestro", "levelup"] or _screen_arg.begins_with("boss_")) else 1.0) and pending < 0:
 		get_viewport().get_texture().get_image().save_png(_shot_path)
 		print("shot saved")
 		get_tree().quit()
@@ -2049,6 +2056,8 @@ func _run_autotest(delta: float) -> void:
 				avail = run.map[run.floor_idx][run.node_idx]["next"]
 			_enter_node(avail[randi() % avail.size()])
 		S.BATTLE:
+			if battle and battle.levelup_active:
+				battle.pick_perk(randi() % 3)
 			if battle and not battle.ending and not run.potions.is_empty() and (run.hp < run.max_hp * 0.45 or battle.enemies.size() > 40):
 				battle.use_potion(0)
 			if battle and not battle.ending and _bot_human:

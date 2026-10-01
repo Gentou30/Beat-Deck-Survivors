@@ -19,6 +19,8 @@ const DB := {
 	"scope": {"name": "スコープ", "desc": "自動弾が2体を貫通する。", "price": 140, "color": Color(0.7, 0.9, 0.7)},
 	"aegis": {"name": "イージス", "desc": "戦闘ごとに最初の被弾を無効化。", "price": 170, "color": Color(0.9, 0.9, 0.5)},
 	"fuel": {"name": "焚き火の薪", "desc": "休憩所の回復量が45%になる。", "price": 110, "color": Color(1.0, 0.6, 0.3)},
+	"magnet": {"name": "マグネットリング", "desc": "ドロップの吸引範囲が2倍になる。", "price": 120, "color": Color(0.7, 0.8, 1.0)},
+	"charm": {"name": "ラッキーチャーム", "desc": "アイテムのドロップ率が+50%。", "price": 140, "color": Color(0.5, 1.0, 0.7)},
 }
 
 static func random_ids(n: int, owned: Array) -> Array:
