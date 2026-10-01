@@ -20,12 +20,14 @@ var dmg_taken := 0
 var asc := 0
 var daily := false
 var act := 1
+var perks := {}  # carried level-up boosts (only when Settings.perk_carry)
 var long_run := true
 var mod_id := -1
 
 func setup(p_mode: String, p_char: String, p_asc := 0) -> void:
 	asc = p_asc
 	act = 1
+	perks = {}
 	mode = p_mode
 	char_id = p_char
 	var c: Dictionary = Characters.DB[p_char]

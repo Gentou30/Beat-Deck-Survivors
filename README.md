@@ -16,7 +16,7 @@ A swarm-survival roguelike where your weapons are a **deck of cards** and every 
 - Move with **WASD / arrows / left stick / drag**. Enemies swarm you; a weak auto-bolt fires every beat.
 - Play cards (**1-5 / A B X Y RB / tap**) as a dot lands on the ring in the top lane. **PERFECT** = x1.5, chain hits for a combo and charge **FEVER**.
 - Enemy attacks (bullet rings, charges, slams) are telegraphed **on the beat grid** - read the rhythm to dodge.
-- Kills drop XP gems, gold, hearts, energy and fever shards; **level up mid-battle** to pick 1 of 3 temporary boosts. Catch the fleeing Gold Goblin for a jackpot.
+- Kills drop XP gems, gold, hearts, energy and fever shards; **level up mid-battle** (a badge appears; open the pick screen with Tab when you're ready - it never interrupts the rhythm) to pick 1 of 3 boosts (battle-only by default, optional carry-over in Settings). Catch the fleeing Gold Goblin for a jackpot.
 - Between fights: pick cards, buy relics/potions, rest/upgrade, take risks at events. Beat one of three bosses.
 
 ## Content

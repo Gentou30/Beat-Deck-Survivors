@@ -178,6 +178,9 @@ var cur_base := Transform2D.IDENTITY
 var player_vel := Vector2.ZERO
 var facing := 1.0
 var _muffled := false
+var dbg_skip := ""
+var _glow_tex: Texture2D
+var _shadow_tex: Texture2D
 var started := false
 var _last_play_ms := -1000
 var pickups: Array[Pickup] = []
@@ -202,6 +205,9 @@ var perk_luck := 0
 var perk_nova := 0
 var perk_combo_keep := false
 var perk_taken: Dictionary = {}
+var perk_open_ms := 0
+var carry_bonus := 0.0
+const PERK_MAX := {"dmg": 5, "bolt": 3, "pierce": 3, "speed": 4, "regen": 4, "magnet": 3, "fever": 4, "combo": 1, "nova": 3, "luck": 3}
 var _last_potion_ms := -1000
 const LANE_X := 420.0
 var count_n := 0
@@ -218,8 +224,21 @@ var _tex_cache := {}
 var _beat_cb: Callable
 var _step_cb: Callable
 
+## Soft round blob (white, alpha falls off) - drawn tinted instead of many polygon circles.
+func _make_blob(w: int, h: int, power: float) -> Texture2D:
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		for x in w:
+			var dx := (x + 0.5) / w * 2.0 - 1.0
+			var dy := (y + 0.5) / h * 2.0 - 1.0
+			var r := sqrt(dx * dx + dy * dy)
+			img.set_pixel(x, y, Color(1, 1, 1, pow(clampf(1.0 - r, 0.0, 1.0), power)))
+	return ImageTexture.create_from_image(img)
+
 func _init() -> void:
-	for i in 70:
+	_glow_tex = _make_blob(32, 32, 1.6)
+	_shadow_tex = _make_blob(32, 16, 0.8)
+	for i in 40:
 		_stars.append([Vector2(randf() * W, randf() * H), randf() * TAU, 0.3 + randf() * 0.7])
 
 func tex(i: int) -> Texture2D:
@@ -272,6 +291,14 @@ func setup(p_run: RunState, p_kind: String, p_diff: float, p_ui: Ui) -> void:
 			banner = "バトル開始"
 	banner_time = 2.2
 	intro_banner = banner
+	if Settings.perk_carry and not tutorial:
+		var tot := 0
+		for pid in run.perks:
+			for n in int(run.perks[pid]):
+				_apply_perk(pid)
+				tot += 1
+		perk_taken = run.perks.duplicate()
+		carry_bonus = minf(0.4, 0.03 * tot)
 	if not tutorial and kind != "boss" and randf() < 0.45:
 		loot_beat = 14 + randi() % 30
 	Conductor.guide = true
@@ -522,7 +549,7 @@ func _make_enemy(k: String) -> Enemy:
 			e.tex = tex(108)
 	if run.act == 2 and run.mode == "run" and k != "boss" and ACT2_TILES.has(k):
 		e.tex = tex2(ACT2_TILES[k])
-	var hpm := 1.0 + 0.1 * run.asc + (0.25 if run.mod_id == 1 else 0.0)
+	var hpm := 1.15 + 0.1 * run.asc + (0.25 if run.mod_id == 1 else 0.0) + carry_bonus
 	if k == "boss" and run.asc >= 4:
 		hpm *= 1.25
 	e.max_hp *= hpm
@@ -532,16 +559,32 @@ func _make_enemy(k: String) -> Enemy:
 	return e
 
 func nearest_enemies(n: int) -> Array:
-	var arr: Array = enemies.filter(func(e: Enemy) -> bool: return e.spawn_t <= 0.0)
-	arr.sort_custom(func(a: Enemy, b: Enemy) -> bool:
-		return a.pos.distance_squared_to(player_pos) < b.pos.distance_squared_to(player_pos))
-	return arr.slice(0, n)
+	# small sorted insertion list: O(enemies * n) instead of filter + full sort every call
+	var out: Array = []
+	var d2: Array = []
+	for e in enemies:
+		if e.spawn_t > 0.0:
+			continue
+		var d := e.pos.distance_squared_to(player_pos)
+		if out.size() >= n and d >= d2[out.size() - 1]:
+			continue
+		var i := out.size()
+		while i > 0 and d < d2[i - 1]:
+			i -= 1
+		out.insert(i, e)
+		d2.insert(i, d)
+		if out.size() > n:
+			out.pop_back()
+			d2.pop_back()
+	return out
 
 # ---- juice helpers ---------------------------------------------------------
 
 func burst(p: Vector2, col: Color, n: int, spd: float, life := 0.5, size := 4.0, grav := 0.0) -> void:
-	if parts.size() > 700:
+	if parts.size() > 320:
 		return
+	if parts.size() > 160:
+		n = maxi(1, n / 2)
 	for i in n:
 		var q := Part.new()
 		q.pos = p
@@ -564,7 +607,7 @@ func ring(p: Vector2, r: float, col: Color, life := 0.35) -> void:
 	fxs.append(f)
 
 func float_text(p: Vector2, s: String, col: Color, size := 18, life := 0.7) -> void:
-	if fxs.size() > 160:
+	if fxs.size() > 70:
 		return
 	var f := Fx.new()
 	f.kind = "text"
@@ -678,7 +721,7 @@ func on_beat(_n: int) -> void:
 			te.pos = _edge_point()
 			enemies.append(te)
 	elif spawning and enemies.size() < 110 and (kind != "boss" or beat_count % 2 == 0):
-		spawn_acc += (1 + int(diff / 2.0)) * Conductor.spb / 0.5  # same spawns per second at any BPM
+		spawn_acc += (1 + int(diff / 2.0)) * 1.1 * Conductor.spb / 0.5  # same spawns per second at any BPM
 		var n := int(spawn_acc)
 		spawn_acc -= n
 		for i in n:
@@ -817,15 +860,26 @@ func _fire_bolt(target: Vector2, dmg: float, spread: float) -> Bolt:
 	return b
 
 func update(delta: float) -> void:
-	for f in fxs:
-		f.life -= delta
-	fxs = fxs.filter(func(f: Fx) -> bool: return f.life > 0.0)
-	for q in parts:
+	var fi := 0
+	while fi < fxs.size():
+		fxs[fi].life -= delta
+		if fxs[fi].life <= 0.0:
+			fxs[fi] = fxs[fxs.size() - 1]
+			fxs.pop_back()
+		else:
+			fi += 1
+	var pi := 0
+	while pi < parts.size():
+		var q := parts[pi]
 		q.life -= delta
+		if q.life <= 0.0:
+			parts[pi] = parts[parts.size() - 1]
+			parts.pop_back()
+			continue
 		q.pos += q.vel * delta
 		q.vel.y += q.grav * delta
 		q.vel *= 0.98
-	parts = parts.filter(func(q: Part) -> bool: return q.life > 0.0)
+		pi += 1
 	banner_time = maxf(0.0, banner_time - delta)
 	cast_t = maxf(0.0, cast_t - delta)
 	count_t = maxf(0.0, count_t - delta)
@@ -974,7 +1028,13 @@ func _update_play(delta: float) -> void:
 		elif invuln <= 0.0 and sh.pos.distance_to(player_pos) < 20.0:
 			damage_player(sh.dmg)
 			sh.life = 0.0
-	eshots = eshots.filter(func(x: EShot) -> bool: return x.life > 0.0)
+	var si := 0
+	while si < eshots.size():
+		if eshots[si].life <= 0.0:
+			eshots[si] = eshots[eshots.size() - 1]
+			eshots.pop_back()
+		else:
+			si += 1
 
 	for b in bolts:
 		b.pos += b.vel * delta
@@ -990,7 +1050,13 @@ func _update_play(delta: float) -> void:
 				else:
 					b.life = 0.0
 					break
-	bolts = bolts.filter(func(b: Bolt) -> bool: return b.life > 0.0)
+	var bi2 := 0
+	while bi2 < bolts.size():
+		if bolts[bi2].life <= 0.0:
+			bolts[bi2] = bolts[bolts.size() - 1]
+			bolts.pop_back()
+		else:
+			bi2 += 1
 
 	if blade_beats > 0:
 		for i in blade_n:
@@ -1106,7 +1172,7 @@ func _luck() -> float:
 	return (1.0 + (0.5 if run.has_relic("charm") else 0.0) + 0.4 * perk_luck)
 
 func _add_pickup(kind: String, p: Vector2, value: float) -> void:
-	if pickups.size() >= 160:
+	if pickups.size() >= 90:
 		return
 	var pk := Pickup.new()
 	pk.kind = kind
@@ -1117,7 +1183,7 @@ func _add_pickup(kind: String, p: Vector2, value: float) -> void:
 
 func _drop(e: Enemy) -> void:
 	var xv: float = XP_VALUE.get(e.kind, 1.0)
-	if pickups.size() >= 120 and xv < 3.0:
+	if pickups.size() >= 55 and xv < 3.0:
 		_gain_xp(xv)  # don't clutter the screen: grant directly
 	else:
 		_add_pickup("xp", e.pos, xv)
@@ -1165,7 +1231,13 @@ func _update_pickups(delta: float) -> void:
 			pk.age = 9999.0
 		elif pk.kind != "xp" and pk.age > 14.0 and not pk.magnet:
 			pk.age = 9999.0
-	pickups = pickups.filter(func(p: Pickup) -> bool: return p.age < 9000.0)
+	var ki := 0
+	while ki < pickups.size():
+		if pickups[ki].age >= 9000.0:
+			pickups[ki] = pickups[pickups.size() - 1]
+			pickups.pop_back()
+		else:
+			ki += 1
 
 func _collect(pk: Pickup) -> void:
 	match pk.kind:
@@ -1191,7 +1263,7 @@ func _collect(pk: Pickup) -> void:
 			Conductor.play_sfx("tick", 1.7)
 
 func _xp_need() -> float:
-	return 9.0 + level * 6.0
+	return 11.0 + level * 7.0
 
 func _gain_xp(v: float) -> void:
 	xp += v
@@ -1199,24 +1271,37 @@ func _gain_xp(v: float) -> void:
 		xp -= _xp_need()
 		level += 1
 		pending_levels += 1
-	if pending_levels > 0 and not levelup_active and not ending:
-		_open_levelup()
+		_on_level_up()
 
-func _open_levelup() -> void:
-	var ids: Array = PERKS.keys()
+## Level-ups never interrupt play: they queue up and the player opens the pick screen when ready.
+func _on_level_up() -> void:
+	float_text(player_pos + Vector2(0, -92), "LEVEL UP!", Color(1.0, 0.92, 0.4), 22, 1.3)
+	ring(player_pos, 120.0, Color(1.0, 0.9, 0.4), 0.5)
+	Conductor.play_sfx("win", 1.25)
+	if levelup_choices.is_empty():
+		levelup_choices = _roll_choices()
+
+func _roll_choices() -> Array:
+	var ids: Array = []
+	for id in PERKS:
+		if int(perk_taken.get(id, 0)) < int(PERK_MAX.get(id, 99)):
+			ids.append(id)
 	ids.shuffle()
-	levelup_choices = ids.slice(0, 3)
-	levelup_active = true
-	flash(Color(1.0, 0.95, 0.5), 0.35)
-	ring(player_pos, 200.0, Color(1.0, 0.9, 0.4), 0.6)
-	burst(player_pos, Color(1.0, 0.9, 0.4), 40, 380.0, 0.7, 5.0)
-	Conductor.play_sfx("big")
+	return ids.slice(0, mini(3, ids.size()))
 
-func pick_perk(i: int) -> void:
-	if not levelup_active or i < 0 or i >= levelup_choices.size():
+func open_perks() -> void:
+	if pending_levels <= 0 or levelup_active or ending or not started:
 		return
-	var id: String = levelup_choices[i]
-	perk_taken[id] = int(perk_taken.get(id, 0)) + 1
+	if levelup_choices.is_empty():
+		levelup_choices = _roll_choices()
+	levelup_active = true
+	perk_open_ms = Time.get_ticks_msec()
+	Conductor.play_sfx("open")
+
+func close_perks() -> void:
+	levelup_active = false
+
+func _apply_perk(id: String) -> void:
 	match id:
 		"dmg": perk_dmg += 0.12
 		"bolt": perk_bolts += 1
@@ -1230,15 +1315,25 @@ func pick_perk(i: int) -> void:
 		"combo": perk_combo_keep = true
 		"nova": perk_nova += 1
 		"luck": perk_luck += 1
+
+func pick_perk(i: int) -> void:
+	if not levelup_active or i < 0 or i >= levelup_choices.size():
+		return
+	if Time.get_ticks_msec() - perk_open_ms < 350:
+		return  # input guard: ignore presses that were meant for the rhythm game
+	var id: String = levelup_choices[i]
+	perk_taken[id] = int(perk_taken.get(id, 0)) + 1
+	_apply_perk(id)
+	if Settings.perk_carry and id != "heal" and id != "shield":
+		run.perks[id] = int(run.perks.get(id, 0)) + 1
 	var pcol: Color = PERKS[id]["color"]
 	ring(player_pos, 90.0, pcol, 0.5)
 	burst(player_pos, pcol, 24, 260.0, 0.5, 4.0)
 	float_text(player_pos + Vector2(0, -70), String(PERKS[id]["name"]), pcol, 20, 1.2)
 	Conductor.play_sfx("win")
 	pending_levels -= 1
+	levelup_choices = _roll_choices() if pending_levels > 0 else []
 	levelup_active = false
-	if pending_levels > 0:
-		_open_levelup()
 
 func _heal(n: int) -> void:
 	run.heal(n)
@@ -1249,6 +1344,10 @@ func _finish(won: bool) -> void:
 		return
 	ending = true
 	end_won = won
+	if won and pending_levels > 0:
+		loot_gold += pending_levels * 5
+		float_text(player_pos + Vector2(0, -110), Loc.t("未使用の強化 → +%dG") % (pending_levels * 5), Color(1.0, 0.85, 0.3), 16, 1.5)
+		pending_levels = 0
 	end_timer = 1.3 if (won and kind == "boss") else 0.7
 	spawning = false
 	bolts.clear()
@@ -1306,8 +1405,9 @@ func damage_player(d: int) -> void:
 func hit(e: Enemy, dmg: float) -> void:
 	e.hp -= dmg
 	e.flash = 0.1
-	burst(e.pos, Color(1, 0.9, 0.6), 3, 160.0, 0.3, 3.0)
-	float_text(e.pos + Vector2(0, -e.radius - 6.0), str(int(dmg)), Color(1, 0.95, 0.7), 14 if dmg < 20.0 else 20, 0.55)
+	burst(e.pos, Color(1, 0.9, 0.6), 2, 160.0, 0.3, 3.0)
+	if dmg >= 12.0 or randf() < 0.3:  # throttle damage numbers
+		float_text(e.pos + Vector2(0, -e.radius - 6.0), str(int(dmg)), Color(1, 0.95, 0.7), 14 if dmg < 20.0 else 20, 0.55)
 
 # ---- potions ---------------------------------------------------------------
 
@@ -1685,12 +1785,18 @@ func draw_world(c: Node2D) -> void:
 	var fcol: Color = th["floor"]
 	var lcol: Color = th["line"]
 	c.draw_set_transform_matrix(base)
-	var floor_tex := tex(0)
-	for x in 20:
-		for y in 12:
-			var lit: float = _lit.get(Vector2i(x, y), 0.0)
-			var v := 0.40 + 0.06 * pulse + lit * 0.45
-			c.draw_texture_rect(floor_tex, Rect2(x * 64, y * 64, 64, 64), false, Color(v * fcol.r, v * fcol.g, v * fcol.b))
+	var fv := 0.40 + 0.06 * pulse
+	if not dbg_skip.contains("floor"):
+		c.draw_rect(Rect2(0, 0, W, H), Color(0.463 * fv * fcol.r, 0.231 * fv * fcol.g, 0.212 * fv * fcol.b))
+	var gline := Color(0.463 * fcol.r, 0.231 * fcol.g, 0.212 * fcol.b, 0.10)
+	for gx in range(0, 1281, 64):
+		c.draw_line(Vector2(gx, 0), Vector2(gx, ARENA_BOTTOM + 20), gline)
+	for gy in range(0, 520, 64):
+		c.draw_line(Vector2(0, gy), Vector2(W, gy), gline)
+	for lk in _lit:
+		var lv: float = _lit[lk]
+		var lc := Color(0.463 * fcol.r, 0.231 * fcol.g, 0.212 * fcol.b)
+		c.draw_rect(Rect2(lk.x * 64, lk.y * 64, 64, 64), Color(lc.r, lc.g, lc.b, lv * 0.6))
 	for s in _stars:
 		var a: float = 0.3 + 0.4 * sin(elapsed * 2.0 * s[2] + s[1])
 		c.draw_rect(Rect2(s[0], Vector2(2, 2)), Color(1, 1, 1, a * 0.5))
@@ -1717,28 +1823,40 @@ func draw_world(c: Node2D) -> void:
 		c.draw_circle(dp, dl["r"], Color(1.0, 0.45, 0.2, 0.08 + 0.12 * (1.0 - dk)))
 		c.draw_arc(dp, dl["r"], 0.0, TAU, 40, Color(1.0, 0.6, 0.3, 0.9), 3.0)
 		c.draw_arc(dp, dl["r"] * dk, 0.0, TAU, 40, Color(1.0, 0.9, 0.5, 0.8), 2.0)
-	# enemies
-	for e in enemies:
-		var sc := 1.0 - maxf(e.spawn_t, 0.0) / 0.35
-		var squash := 1.0 + 0.08 * sin(elapsed * 10.0 + e.phase) + 0.1 * pulse
-		var sz := e.radius * 3.2 * sc
-		var col := Color(3, 3, 3) if e.flash > 0.0 else (Color(0.6, 0.8, 1.3) if slow_beats > 0 else Color.WHITE)
-		var flip := -1.0 if player_pos.x < e.pos.x else 1.0
-		c.draw_circle(e.pos + Vector2(0, e.radius * 0.9), e.radius * 0.9 * sc, Color(0, 0, 0, 0.35))
-		var w := sz * flip * (2.0 - squash)
-		c.draw_texture_rect(e.tex, Rect2(e.pos.x - absf(w) / 2.0, e.pos.y - sz * squash / 2.0, w, sz * squash), false, col)
-		if e.kind == "boss" or e.kind == "elite":
-			c.draw_arc(e.pos, e.radius + 5.0, 0.0, TAU, 48, Color(e.color, 0.8), 3.0)
-		if e.spawn_t > 0.0:
-			c.draw_arc(e.pos, 22.0 * (1.0 + e.spawn_t * 3.0), 0.0, TAU, 20, Color(1, 0.4, 0.4, 0.6), 2.0)
-		elif e.kind != "boss" and e.max_hp > 0.0 and (e.hp < e.max_hp - 0.01 or e.kind == "tank" or e.kind == "elite" or e.kind == "loot"):
-			var bw := maxf(20.0, e.radius * 2.0)
-			var bx := e.pos.x - bw / 2.0
-			var by2 := e.pos.y - e.radius * 1.6 - 5.0
-			c.draw_rect(Rect2(bx - 1.0, by2 - 1.0, bw + 2.0, 5.0), Color(0, 0, 0, 0.7))
-			c.draw_rect(Rect2(bx, by2, bw * clampf(e.hp / e.max_hp, 0.0, 1.0), 3.0), Color(1.0, 0.85, 0.3) if e.kind == "loot" else Color(0.95, 0.3, 0.3))
-		if e.kind == "loot":
-			c.draw_arc(e.pos, e.radius + 6.0 + 2.0 * sin(elapsed * 8.0), 0.0, TAU, 24, Color(1.0, 0.85, 0.3, 0.9), 2.0)
+	# enemies - drawn in batches: all shadows (one texture), then sprites grouped by texture, then bars
+	if not dbg_skip.contains("enemies"):
+		for e in enemies:
+			var shs := 1.0 - maxf(e.spawn_t, 0.0) / 0.35
+			c.draw_texture_rect(_shadow_tex, Rect2(e.pos.x - e.radius * 1.1 * shs, e.pos.y + e.radius * 0.45, e.radius * 2.2 * shs, e.radius * 1.1 * shs), false, Color(0, 0, 0, 0.55))
+		var groups := {}
+		for e in enemies:
+			if not groups.has(e.tex):
+				groups[e.tex] = []
+			groups[e.tex].append(e)
+		var slow_col := Color(0.6, 0.8, 1.3) if slow_beats > 0 else Color.WHITE
+		for gtex in groups:
+			for ge in groups[gtex]:
+				var e: Enemy = ge
+				var sc := 1.0 - maxf(e.spawn_t, 0.0) / 0.35
+				var squash := 1.0 + 0.08 * sin(elapsed * 10.0 + e.phase) + 0.1 * pulse
+				var sz := e.radius * 3.2 * sc
+				var col := Color(3, 3, 3) if e.flash > 0.0 else slow_col
+				var flip := -1.0 if player_pos.x < e.pos.x else 1.0
+				var w := sz * flip * (2.0 - squash)
+				c.draw_texture_rect(gtex, Rect2(e.pos.x - absf(w) / 2.0, e.pos.y - sz * squash / 2.0, w, sz * squash), false, col)
+		for e in enemies:
+			if e.kind == "boss" or e.kind == "elite":
+				c.draw_arc(e.pos, e.radius + 5.0, 0.0, TAU, 32, Color(e.color, 0.8), 3.0)
+			if e.spawn_t > 0.0:
+				c.draw_arc(e.pos, 22.0 * (1.0 + e.spawn_t * 3.0), 0.0, TAU, 16, Color(1, 0.4, 0.4, 0.6), 2.0)
+			elif e.kind != "boss" and e.max_hp > 0.0 and (e.hp < e.max_hp - 0.01 or e.kind == "tank" or e.kind == "elite" or e.kind == "loot"):
+				var bw := maxf(20.0, e.radius * 2.0)
+				var bx := e.pos.x - bw / 2.0
+				var by2 := e.pos.y - e.radius * 1.6 - 5.0
+				c.draw_rect(Rect2(bx - 1.0, by2 - 1.0, bw + 2.0, 5.0), Color(0, 0, 0, 0.7))
+				c.draw_rect(Rect2(bx, by2, bw * clampf(e.hp / e.max_hp, 0.0, 1.0), 3.0), Color(1.0, 0.85, 0.3) if e.kind == "loot" else Color(0.95, 0.3, 0.3))
+			if e.kind == "loot":
+				c.draw_arc(e.pos, e.radius + 6.0 + 2.0 * sin(elapsed * 8.0), 0.0, TAU, 24, Color(1.0, 0.85, 0.3, 0.9), 2.0)
 	for pk in pickups:
 		var bob := sin(elapsed * 6.0 + pk.pos.x * 0.05) * 2.0
 		var pc := Color(0.4, 0.8, 1.0)
@@ -1760,8 +1878,9 @@ func draw_world(c: Node2D) -> void:
 				psz = 4.0 + minf(pk.value, 6.0) * 0.5
 		var pp := pk.pos + Vector2(0, bob)
 		var fade := 1.0 if (pk.kind == "xp" or pk.age < 11.0 or pk.magnet) else (0.4 + 0.6 * absf(sin(elapsed * 14.0)))
-		c.draw_colored_polygon(PackedVector2Array([pp + Vector2(0, -psz), pp + Vector2(psz, 0), pp + Vector2(0, psz), pp + Vector2(-psz, 0)]), Color(pc, fade))
-		c.draw_circle(pp + Vector2(-1, -1), 1.6, Color(1, 1, 1, 0.8 * fade))
+		var gs := psz * 3.4
+		c.draw_texture_rect(_glow_tex, Rect2(pp.x - gs / 2.0, pp.y - gs / 2.0, gs, gs), false, Color(pc, fade))
+		c.draw_rect(Rect2(pp.x - 1.5, pp.y - 1.5, 3.0, 3.0), Color(1, 1, 1, 0.9 * fade))
 	if blade_beats > 0:
 		for i in blade_n:
 			var a := blade_angle + i * TAU / blade_n
@@ -1774,8 +1893,9 @@ func draw_world(c: Node2D) -> void:
 	var ps := 52.0 + 8.0 * pulse
 	var bob := 1.0 + 0.05 * sin(elapsed * (14.0 if player_vel.length() > 1.0 else 5.0))
 	var tilt := clampf(player_vel.x / 270.0, -1.0, 1.0) * 0.14
-	c.draw_circle(player_pos + Vector2(0, 24), 18.0, Color(0, 0, 0, 0.4))
-	c.draw_circle(player_pos, 34.0 + 6.0 * pulse, Color(char_def["color"] as Color, 0.12 + 0.1 * pulse))
+	c.draw_texture_rect(_shadow_tex, Rect2(player_pos.x - 22.0, player_pos.y + 17.0, 44.0, 16.0), false, Color(0, 0, 0, 0.6))
+	var ar := 40.0 + 6.0 * pulse
+	c.draw_texture_rect(_glow_tex, Rect2(player_pos.x - ar, player_pos.y - ar, ar * 2.0, ar * 2.0), false, Color(char_def["color"] as Color, 0.35 + 0.25 * pulse))
 	c.draw_set_transform_matrix(base * Transform2D(tilt, Vector2(facing, 1.0), 0.0, player_pos + Vector2(0, 26)))
 	c.draw_texture_rect(tex(int(char_def["tile"])), Rect2(-ps / 2.0, -ps * bob, ps, ps * bob), false, Color.WHITE if not blink else Color(1, 1, 1, 0.35))
 	c.draw_set_transform_matrix(base)
@@ -1808,6 +1928,8 @@ func draw_world(c: Node2D) -> void:
 				ui.ds(c, f.pos + Vector2(-60, -rise), f.text, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(f.size * pop), Color(f.color, minf(1.0, k * 2.0)))
 	c.draw_set_transform_matrix(Transform2D.IDENTITY)
 	# screen overlays
+	if dbg_skip.contains("vig"):
+		return
 	var hp_frac := float(run.hp) / float(run.max_hp)
 	if hp_frac < 0.35:
 		_vignette(c, Color(0.9, 0.05, 0.1), (0.35 - hp_frac) * 1.4 + 0.1 * sin(elapsed * 6.0))
@@ -1821,21 +1943,11 @@ func draw_world(c: Node2D) -> void:
 func draw_glow(c: Node2D) -> void:
 	c.draw_set_transform_matrix(cur_base)
 	for bl in bolts:
-		c.draw_circle(bl.pos, 13.0, Color(bl.color, 0.22))
-		c.draw_circle(bl.pos, 7.0, Color(bl.color, 0.55))
-		c.draw_circle(bl.pos, 3.5, Color(1, 1, 1, 0.9))
+		c.draw_texture_rect(_glow_tex, Rect2(bl.pos.x - 15.0, bl.pos.y - 15.0, 30.0, 30.0), false, Color(bl.color, 0.85))
+		c.draw_rect(Rect2(bl.pos.x - 2.5, bl.pos.y - 2.5, 5.0, 5.0), Color(1, 1, 1, 0.95))
 	for sh in eshots:
-		c.draw_circle(sh.pos, 16.0, Color(1.0, 0.25, 0.45, 0.22))
-		c.draw_circle(sh.pos, 8.0, Color(1.0, 0.45, 0.6, 0.6))
-		c.draw_circle(sh.pos, 4.0, Color(1, 0.9, 0.95, 0.95))
-	for pk in pickups:
-		var gc := Color(0.4, 0.8, 1.0, 0.18)
-		match pk.kind:
-			"gold": gc = Color(1.0, 0.85, 0.3, 0.22)
-			"heart": gc = Color(1.0, 0.4, 0.5, 0.22)
-			"energy": gc = Color(1.0, 0.95, 0.4, 0.22)
-			"fever": gc = Color(1.0, 0.6, 1.0, 0.22)
-		c.draw_circle(pk.pos, 12.0, gc)
+		c.draw_texture_rect(_glow_tex, Rect2(sh.pos.x - 18.0, sh.pos.y - 18.0, 36.0, 36.0), false, Color(1.0, 0.35, 0.55, 0.95))
+		c.draw_rect(Rect2(sh.pos.x - 3.0, sh.pos.y - 3.0, 6.0, 6.0), Color(1, 0.92, 0.96, 1.0))
 	for q in parts:
 		var k := q.life / q.max_life
 		var sz := Vector2(q.size, q.size) * k
@@ -2041,6 +2153,12 @@ func draw_hud(c: Control) -> void:
 
 	if run.daily:
 		ui.text(c, Loc.t("★ デイリー: %s") % Loc.t(RunState.MOD_NAMES[run.mod_id]), Vector2(0, 112), 13, Color(1.0, 0.85, 0.3, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+	if pending_levels > 0 and not levelup_active and started and not ending:
+		var bp := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.008)
+		var br := Rect2(10, 206, 300, 34)
+		var keyn := Loc.t("タップ") if ui.touch else Settings.key_name(Settings.keymap["perk"][0])
+		c.draw_rect(br.grow(2.0 + 2.0 * bp), Color(1.0, 0.9, 0.3, 0.25 + 0.3 * bp))
+		ui.button(c, "perk_open", br, Loc.t("★ レベルアップ ×%d  [%s]") % [pending_levels, keyn], true, Color(1.0, 0.85, 0.3), 16)
 	# 4-3-2-1 countdown
 	if not started and count_n > 0:
 		var k2 := count_t
@@ -2082,20 +2200,24 @@ func draw_hud(c: Control) -> void:
 func draw_levelup(c: Control) -> void:
 	if not levelup_active:
 		return
-	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.6))
-	var pulse := 0.5 + 0.5 * sin(elapsed * 6.0 + Time.get_ticks_msec() * 0.006)
-	ui.text(c, "LEVEL UP!  Lv %d" % level, Vector2(0, 150), 46, Color(1.0, 0.92, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
-	ui.text(c, "強化を1つ選ぼう(この戦闘のみ有効)  [1-3 / 矢印+Enter]" if pending_levels <= 1 else Loc.t("強化を1つ選ぼう (あと%d回)") % pending_levels, Vector2(0, 186), 18, Color(0.9, 0.9, 1.0), HORIZONTAL_ALIGNMENT_CENTER, W)
-	for i in levelup_choices.size():
+	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.55))
+	ui.text(c, "LEVEL UP!  Lv %d" % level, Vector2(0, 140), 44, Color(1.0, 0.92, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
+	var n_left := pending_levels
+	ui.text(c, Loc.t("強化を1つ選ぼう (残り%d回)") % n_left, Vector2(0, 176), 18, Color(0.9, 0.9, 1.0), HORIZONTAL_ALIGNMENT_CENTER, W)
+	ui.text(c, "← → で選択 → Enter / クリックで決定   (数字キーでは選べません)", Vector2(0, 202), 14, Color(0.8, 0.8, 0.95, 0.9), HORIZONTAL_ALIGNMENT_CENTER, W)
+	var cnt := levelup_choices.size()
+	for i in cnt:
 		var id: String = levelup_choices[i]
 		var pd: Dictionary = PERKS[id]
 		var pcol: Color = pd["color"]
-		var r := Rect2(W / 2.0 - 450.0 + i * 310.0, 230.0, 290.0, 240.0)
+		var r := Rect2(W / 2.0 - cnt * 150.0 + i * 310.0 + 10.0, 230.0, 290.0, 230.0)
 		ui.button(c, "perk:%d" % i, r, "", true, pcol)
-		c.draw_rect(Rect2(r.position, Vector2(r.size.x, 6.0)), Color(pcol, 0.6 + 0.4 * pulse))
-		ui.text(c, "[%d]" % (i + 1), r.position + Vector2(12, 30), 18, Color(1, 1, 1, 0.6))
-		ui.text(c, String(pd["name"]), r.position + Vector2(0, 100), 28, pcol.lerp(Color.WHITE, 0.3), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		ui.dms(c, r.position + Vector2(18, 150), String(pd["desc"]), HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 36.0, 18, 3, Color(0.95, 0.95, 1.0))
+		c.draw_rect(Rect2(r.position, Vector2(r.size.x, 6.0)), Color(pcol, 0.8))
+		ui.text(c, String(pd["name"]), r.position + Vector2(0, 96), 28, pcol.lerp(Color.WHITE, 0.3), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		ui.dms(c, r.position + Vector2(18, 146), String(pd["desc"]), HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 36.0, 18, 3, Color(0.95, 0.95, 1.0))
 		var have := int(perk_taken.get(id, 0))
-		if have > 0:
-			ui.text(c, "所持 x%d" % have, r.position + Vector2(0, 222), 13, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		var mx := int(PERK_MAX.get(id, 0))
+		if have > 0 or mx > 0:
+			ui.text(c, (Loc.t("所持 x%d") % have) + ("" if mx == 0 else " / %d" % mx), r.position + Vector2(0, 214), 13, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	ui.button(c, "perk_close", Rect2(W / 2.0 - 150.0, 490.0, 300.0, 46.0), "あとで選ぶ  [Esc / Tab]", true, Color(0.6, 0.6, 0.8), 18)
+	ui.text(c, "未使用の強化は戦闘終了時に +5G に変わります", Vector2(0, 560), 13, Color(1.0, 0.85, 0.4, 0.8), HORIZONTAL_ALIGNMENT_CENTER, W)

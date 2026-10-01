@@ -13,6 +13,7 @@ var fullscreen := false
 var tutorial_done := false
 var lang := "ja"
 var reduce_flash := false
+var perk_carry := false  # level-up boosts last for the whole run (enemies get tougher)
 var assist := 0  # 0 off, 1 wide, 2 very wide timing windows
 var clap_on := true
 var clap_vol := 0.7
@@ -24,14 +25,14 @@ var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_ki
 var ach := {}
 var keymap := {}  # action -> [primary, secondary] keycodes (0 = unbound)
 
-const ACTIONS := ["card1", "card2", "card3", "card4", "card5", "potion1", "potion2", "potion3", "potion4", "up", "down", "left", "right", "pause"]
+const ACTIONS := ["card1", "card2", "card3", "card4", "card5", "potion1", "potion2", "potion3", "potion4", "up", "down", "left", "right", "pause", "perk"]
 
 func default_keys() -> Dictionary:
 	return {
 		"card1": [KEY_1, 0], "card2": [KEY_2, 0], "card3": [KEY_3, 0], "card4": [KEY_4, 0], "card5": [KEY_5, 0],
 		"potion1": [KEY_6, KEY_Z], "potion2": [KEY_7, KEY_X], "potion3": [KEY_8, KEY_C], "potion4": [KEY_9, KEY_V],
 		"up": [KEY_W, KEY_UP], "down": [KEY_S, KEY_DOWN], "left": [KEY_A, KEY_LEFT], "right": [KEY_D, KEY_RIGHT],
-		"pause": [KEY_P, 0],
+		"pause": [KEY_P, 0], "perk": [KEY_TAB, KEY_E],
 	}
 
 func reset_keys() -> void:
@@ -101,6 +102,7 @@ func load_cfg() -> void:
 	lang = cf.get_value("game", "lang", lang)
 	reduce_flash = cf.get_value("game", "reduce_flash", reduce_flash)
 	assist = cf.get_value("game", "assist", assist)
+	perk_carry = cf.get_value("game", "perk_carry", perk_carry)
 	for k in stats:
 		stats[k] = cf.get_value("stats", k, stats[k])
 	for a in ACTIONS:
@@ -138,6 +140,7 @@ func save_cfg() -> void:
 	cf.set_value("game", "lang", lang)
 	cf.set_value("game", "reduce_flash", reduce_flash)
 	cf.set_value("game", "assist", assist)
+	cf.set_value("game", "perk_carry", perk_carry)
 	for k in stats:
 		cf.set_value("stats", k, stats[k])
 	cf.set_value("game", "version", 2)

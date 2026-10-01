@@ -86,6 +86,10 @@ var calib_done := false
 var _autotest := false
 var _bot_human := false
 var _last_prog := -1
+var _perf := false
+var _skip := ""  # debug: comma list of world,glow,hud to skip drawing (perf bisecting)
+var _perf_acc := {"update": 0.0, "world": 0.0, "glow": 0.0, "hud": 0.0, "frames": 0, "max_update": 0.0, "max_draw": 0.0}
+var _perf_t := 0.0
 var _bot_noise := Vector2.ZERO
 var _bot_noise_t := 0.0
 var _bot_beat := -1
@@ -105,8 +109,10 @@ func _ready() -> void:
 	glow.material = gm
 	add_child(glow)
 	glow.draw.connect(func() -> void:
-		if state == S.BATTLE and battle:
-			battle.draw_glow(glow))
+		if state == S.BATTLE and battle and not _skip.contains("glow"):
+			var _t0 := Time.get_ticks_usec()
+			battle.draw_glow(glow)
+			_perf_add("glow", Time.get_ticks_usec() - _t0))
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	hud = Control.new()
@@ -121,6 +127,7 @@ func _ready() -> void:
 		bg_parts.append([Vector2(randf() * W, randf() * H), 10.0 + randf() * 40.0, 2.0 + randf() * 4.0, randf()])
 	var args := OS.get_cmdline_user_args()
 	_autotest = "--autotest" in args
+	_perf = "--perf" in args
 	_bot_human = "--bot=human" in args
 	for a in args:
 		if a.begins_with("--lang="):
@@ -129,6 +136,17 @@ func _ready() -> void:
 			_shot_path = a.substr(7)
 		elif a.begins_with("--screen="):
 			_screen_arg = a.substr(9)
+	if OS.has_feature("web") and not _autotest:
+		# debug: ?screen=stress&perf=1 in the page URL (used by tools/web_perf_test.js)
+		var q = JavaScriptBridge.eval("new URLSearchParams(location.search).get('screen') || ''")
+		if q is String and q != "":
+			_screen_arg = q
+		var sk = JavaScriptBridge.eval("new URLSearchParams(location.search).get('skip') || ''")
+		if sk is String:
+			_skip = sk
+		var pq = JavaScriptBridge.eval("new URLSearchParams(location.search).get('perf') || ''")
+		if pq is String and pq != "":
+			_perf = true
 	if _autotest or _screen_arg != "":
 		Conductor.start()
 		state = S.MENU
@@ -213,6 +231,7 @@ func _start_battle(kind: String) -> void:
 	battle.setup(run, kind, diff, ui)
 	if _autotest:
 		battle.bot_dir = Callable(self, "_bot_dir")
+	battle.dbg_skip = _skip
 	battle.finished.connect(_on_battle_done.bind(kind))
 	paused = false
 	goto(S.BATTLE)
@@ -521,6 +540,7 @@ func _pad_button(idx: int) -> void:
 			JOY_BUTTON_Y: battle.try_play(3)
 			JOY_BUTTON_RIGHT_SHOULDER: battle.try_play(4)
 			JOY_BUTTON_LEFT_SHOULDER: battle.use_potion(0)
+			JOY_BUTTON_BACK: battle.open_perks()
 		return
 	if state == S.SPLASH:
 		return
@@ -530,7 +550,7 @@ func _pad_button(idx: int) -> void:
 		elif not focus_id.begins_with("sl:"):
 			_click(focus_id)
 	elif idx == JOY_BUTTON_B:
-		for bid in ["deck_close", "sys_no", "sys_resume", "resume", "up_cancel", "back", "leave", "skip", "menu"]:
+		for bid in ["deck_close", "sys_no", "sys_resume", "resume", "perk_close", "up_cancel", "back", "leave", "skip", "menu"]:
 			for bt in ui.buttons:
 				if bt["id"] == bid:
 					_click(bid)
@@ -553,6 +573,8 @@ func _pad_nav(dir: Vector2) -> void:
 	for bt in ui.buttons:
 		var bid: String = bt["id"]
 		if bid.begins_with("relic:") or bid.begins_with("pot:") or bid == "tr":
+			continue
+		if state == S.BATTLE and battle != null and battle.levelup_active and not bid.begins_with("perk"):
 			continue
 		cands.append(bt)
 	if cands.is_empty():
@@ -760,6 +782,11 @@ func _key(k: int) -> void:
 		if k == KEY_ESCAPE:
 			if state == S.BATTLE and paused:
 				_toggle_pause()
+			elif state == S.BATTLE and battle != null and battle.levelup_active:
+				battle.close_perks()
+			return
+		if state == S.BATTLE and battle != null and battle.levelup_active and Settings.action_for_key(k) == "perk":
+			battle.close_perks()
 			return
 	match state:
 		S.MODE:
@@ -799,9 +826,13 @@ func _key(k: int) -> void:
 			var act := Settings.action_for_key(k)
 			if k == KEY_ESCAPE or act == "pause":
 				_toggle_pause()
+			elif act == "perk":
+				if battle.levelup_active:
+					battle.close_perks()
+				else:
+					battle.open_perks()
 			elif battle.levelup_active:
-				if act.begins_with("card"):
-					battle.pick_perk(int(act.substr(4)) - 1)
+				pass  # card keys must not pick boosts by accident
 			elif act.begins_with("card"):
 				battle.try_play(int(act.substr(4)) - 1)
 			elif act.begins_with("potion"):
@@ -877,6 +908,14 @@ func _click(id: String) -> void:
 	if id.begins_with("perk:"):
 		if battle:
 			battle.pick_perk(int(id.substr(5)))
+		return
+	if id == "perk_open":
+		if battle:
+			battle.open_perks()
+		return
+	if id == "perk_close":
+		if battle:
+			battle.close_perks()
 		return
 	if id.begins_with("potion:"):
 		if state == S.BATTLE and not paused and battle:
@@ -1016,6 +1055,9 @@ func _click(id: String) -> void:
 			Settings.save_cfg()
 		"shake":
 			Settings.shake = not Settings.shake
+			Settings.save_cfg()
+		"carry":
+			Settings.perk_carry = not Settings.perk_carry
 			Settings.save_cfg()
 		"flash":
 			Settings.reduce_flash = not Settings.reduce_flash
@@ -1195,7 +1237,9 @@ func _process(delta: float) -> void:
 		if p[0].y < -10.0:
 			p[0] = Vector2(randf() * W, H + 10.0)
 	if state == S.BATTLE and battle and not paused:
+		var _t0 := Time.get_ticks_usec()
 		battle.update(delta)
+		_perf_add("update", Time.get_ticks_usec() - _t0)
 	if _autotest or _shot_path != "":
 		_run_autotest(delta)
 	queue_redraw()
@@ -1217,13 +1261,37 @@ func _on_enter(s: S) -> void:
 	if s == S.PICK:
 		pick_scroll = 0
 
+func _perf_add(key: String, us: int) -> void:
+	if not _perf:
+		return
+	_perf_acc[key] += us / 1000.0
+	if key == "update":
+		_perf_acc["max_update"] = maxf(_perf_acc["max_update"], us / 1000.0)
+
+func _perf_report() -> void:
+	if not _perf or state != S.BATTLE or battle == null:
+		return
+	_perf_t += get_process_delta_time()
+	_perf_acc["frames"] += 1
+	if _perf_t >= 5.0:
+		var f: float = maxf(1.0, _perf_acc["frames"])
+		print("PERF fps=%d avg_ms update=%.2f world=%.2f glow=%.2f hud=%.2f | max_update=%.1f | enemies=%d pickups=%d parts=%d fxs=%d bolts=%d eshots=%d" % [Engine.get_frames_per_second(), _perf_acc["update"] / f, _perf_acc["world"] / f, _perf_acc["glow"] / f, _perf_acc["hud"] / f, _perf_acc["max_update"], battle.enemies.size(), battle.pickups.size(), battle.parts.size(), battle.fxs.size(), battle.bolts.size(), battle.eshots.size()])
+		_perf_t = 0.0
+		_perf_acc = {"update": 0.0, "world": 0.0, "glow": 0.0, "hud": 0.0, "frames": 0, "max_update": 0.0, "max_draw": 0.0}
+
 func _draw() -> void:
-	if state == S.BATTLE and battle:
+	if state == S.BATTLE and battle and not _skip.contains("world"):
+		var _t0 := Time.get_ticks_usec()
 		battle.draw_world(self)
+		_perf_add("world", Time.get_ticks_usec() - _t0)
 
 # ---- HUD / screens ---------------------------------------------------------
 
 func draw_hud(c: Control) -> void:
+	var _hud_t0 := Time.get_ticks_usec()
+	if _skip.contains("hud"):
+		return
+	_perf_report()
 	ui.begin(c, get_process_delta_time())
 	ui.touch = touch_mode
 	ui.pad = pad_hw
@@ -1264,6 +1332,7 @@ func draw_hud(c: Control) -> void:
 		_draw_joystick(c)
 	if fade > 0.0:
 		c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, clampf(fade, 0.0, 1.0)))
+	_perf_add("hud", Time.get_ticks_usec() - _hud_t0)
 
 func _draw_joystick(c: Control) -> void:
 	if joy_id != -1:
@@ -1471,19 +1540,19 @@ func _arrow_row(c: Control, id_minus: String, id_plus: String, y: float, label: 
 	ui.button(c, id_plus, Rect2(SL_X + 364.0, y, 56.0, 36.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
 
 const KEY_ROWS_L := ["card1", "card2", "card3", "card4", "card5", "potion1", "potion2"]
-const KEY_ROWS_R := ["potion3", "potion4", "up", "down", "left", "right", "pause"]
+const KEY_ROWS_R := ["potion3", "potion4", "up", "down", "left", "right", "pause", "perk"]
 
 func _action_label(a: String) -> String:
 	if a.begins_with("card"):
 		return Loc.t("カード%d") % int(a.substr(4))
 	if a.begins_with("potion"):
 		return Loc.t("ポーション%d") % int(a.substr(6))
-	return {"up": Loc.t("上へ移動"), "down": Loc.t("下へ移動"), "left": Loc.t("左へ移動"), "right": Loc.t("右へ移動"), "pause": Loc.t("ポーズ")}[a]
+	return {"up": Loc.t("上へ移動"), "down": Loc.t("下へ移動"), "left": Loc.t("左へ移動"), "right": Loc.t("右へ移動"), "pause": Loc.t("ポーズ"), "perk": Loc.t("強化を選ぶ")}[a]
 
 func _key_col(c: Control, rows: Array, x0: float) -> void:
 	for i in rows.size():
 		var act: String = rows[i]
-		var y := 190.0 + i * 52.0
+		var y := 184.0 + i * 46.0
 		ui.text(c, _action_label(act), Vector2(x0, y + 26.0), 17, Color.WHITE)
 		for slot in 2:
 			var waiting := rebind_action == act and rebind_slot == slot
@@ -1545,6 +1614,8 @@ func _draw_settings(c: Control) -> void:
 		_toggle_btn(c, "fullscreen", Rect2(290, 250, 340, 44), "フルスクリーン", Settings.fullscreen)
 		var al := ["オフ", "広い", "とても広い"]
 		_toggle_btn(c, "assist", Rect2(650, 250, 340, 44), "判定アシスト", Settings.assist > 0, al[Settings.assist])
+		ui.button(c, "carry", Rect2(290, 380, 700, 54), "強化の持ち越し:  ON (ラン通し・敵が強くなる)" if Settings.perk_carry else "強化の持ち越し:  OFF (戦闘ごとにリセット)", true, Color(0.5, 0.9, 0.6) if Settings.perk_carry else Color(0.6, 0.6, 0.75), 17)
+		ui.text(c, "レベルアップ強化の効果を次の戦闘へ引き継ぐかを選べます。ONでは取得数に応じて敵のHPが最大+40%まで上がります。", Vector2(0, 452), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
 		ui.button(c, "lang", Rect2(290, 320, 700, 44), "言語 / Language:  " + ("日本語" if Settings.lang == "ja" else "English"), true, Color(1.0, 0.8, 0.35), 18)
 	else:
 		ui.text(c, "キー1", Vector2(150.0 + 120.0 - 20.0, 172.0), 13, Color(0.8, 0.8, 0.9))
@@ -2004,7 +2075,14 @@ func _debug_screen(sname: String) -> void:
 			end_won = true
 			state = S.END
 		_:
-			if sname == "act2" or sname == "maestro":
+			if sname == "stress":
+				run.start_act2()
+				run.floor_idx = 7
+				run.node_idx = 0
+				run.max_hp = 9999
+				run.hp = 9999
+				_start_battle("battle")
+			elif sname == "act2" or sname == "maestro":
 				run.start_act2()
 				run.floor_idx = 3
 				run.node_idx = 0
@@ -2028,6 +2106,8 @@ func _run_autotest(delta: float) -> void:
 		_shot_played = true
 		if _screen_arg == "levelup":
 			battle._gain_xp(40.0)
+			if "--open" in OS.get_cmdline_user_args():
+				battle.open_perks()
 			for i in 12:
 				battle._add_pickup(["xp", "gold", "heart", "energy", "fever"][i % 5], battle.player_pos + Vector2(randf_range(-150, 150), randf_range(-90, 90)), 2.0)
 		for i in 5:
@@ -2056,7 +2136,9 @@ func _run_autotest(delta: float) -> void:
 				avail = run.map[run.floor_idx][run.node_idx]["next"]
 			_enter_node(avail[randi() % avail.size()])
 		S.BATTLE:
-			if battle and battle.levelup_active:
+			if battle and battle.pending_levels > 0 and not battle.levelup_active and not battle.ending:
+				battle.open_perks()
+			elif battle and battle.levelup_active:
 				battle.pick_perk(randi() % 3)
 			if battle and not battle.ending and not run.potions.is_empty() and (run.hp < run.max_hp * 0.45 or battle.enemies.size() > 40):
 				battle.use_potion(0)
