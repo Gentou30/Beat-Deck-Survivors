@@ -6,7 +6,7 @@ const H := 720.0
 const SL_X := 480.0
 const SL_W := 420.0
 
-enum S { MENU, MODE, CHAR, SETTINGS, CALIB, MAP, BATTLE, REWARD, REST, PICK, SHOP, EVENT, TREASURE, END }
+enum S { SPLASH, MENU, MODE, CHAR, SETTINGS, CALIB, MAP, BATTLE, REWARD, REST, PICK, SHOP, EVENT, TREASURE, END }
 
 const NODE_COL := {
 	"battle": Color(0.9, 0.35, 0.35), "elite": Color(1.0, 0.6, 0.2), "rest": Color(0.4, 0.85, 0.5),
@@ -17,7 +17,7 @@ const NODE_GLYPH := {"battle": "戦", "elite": "強", "rest": "休", "shop": "�
 const NODE_NAME := {"battle": "バトル", "elite": "エリート", "rest": "休憩所", "shop": "ショップ", "event": "イベント", "treasure": "宝箱", "boss": "ボス"}
 
 var ui := Ui.new()
-var state: S = S.MENU
+var state: S = S.SPLASH
 var pending := -1
 var fade := 0.0
 var t := 0.0
@@ -79,8 +79,9 @@ func _ready() -> void:
 			_shot_path = a.substr(7)
 		elif a.begins_with("--screen="):
 			_screen_arg = a.substr(9)
-	if not Conductor.running:
+	if _autotest or _screen_arg != "":
 		Conductor.start()
+		state = S.MENU
 	if _autotest:
 		Engine.time_scale = 5.0 if _shot_path == "" else 1.0
 		start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % 3])
@@ -289,15 +290,29 @@ func _event_choice(e: String) -> void:
 
 # ---- input -----------------------------------------------------------------
 
+func _menu_ids() -> Array:
+	return ["start", "settings"] if OS.has_feature("web") else ["start", "settings", "quit"]
+
+func _begin() -> void:
+	# Browsers only allow audio after a user gesture, so music starts here.
+	if not Conductor.running:
+		Conductor.start()
+	Conductor.play_sfx("select")
+	goto(S.MENU)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if fade > 0.3:
+		return
+	if state == S.SPLASH:
+		if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed):
+			_begin()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		_key((event as InputEventKey).keycode)
 	elif event is InputEventMouseButton and event.pressed:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			var p := hud.get_local_mouse_position()
+			var p := mb.position
 			var id := ui.hit(p)
 			if id.begins_with("sl:"):
 				drag_id = id
@@ -330,14 +345,15 @@ func _key(k: int) -> void:
 		return
 	match state:
 		S.MENU:
+			var n := _menu_ids().size()
 			if k == KEY_UP:
-				menu_idx = (menu_idx + 2) % 3
+				menu_idx = (menu_idx + n - 1) % n
 				Conductor.play_sfx("tick")
 			elif k == KEY_DOWN:
-				menu_idx = (menu_idx + 1) % 3
+				menu_idx = (menu_idx + 1) % n
 				Conductor.play_sfx("tick")
 			elif k == KEY_ENTER or k == KEY_SPACE:
-				_click(["start", "settings", "quit"][menu_idx])
+				_click(_menu_ids()[menu_idx])
 		S.MODE, S.CHAR:
 			if k == KEY_ESCAPE:
 				_click("back")
@@ -582,6 +598,7 @@ func _draw() -> void:
 func draw_hud(c: Control) -> void:
 	ui.begin(c, get_process_delta_time())
 	match state:
+		S.SPLASH: _draw_splash(c)
 		S.MENU: _draw_menu(c)
 		S.MODE: _draw_mode(c)
 		S.CHAR: _draw_char(c)
@@ -633,13 +650,21 @@ func _dancers(c: Control, y: float) -> void:
 		var bob := absf(sin(t * 4.0 + i * 0.7)) * 14.0 * (0.5 + menu_pulse)
 		c.draw_texture_rect(tex(tiles[i]), Rect2(x, y - bob, 64, 64), false)
 
+func _draw_splash(c: Control) -> void:
+	_bg(c)
+	_logo(c, 200.0)
+	_dancers(c, 520.0)
+	var a := 0.5 + 0.5 * sin(t * 4.0)
+	ui.center(c, "クリック または 何かキーを押してスタート", 440.0, 26, Color(1, 0.9, 0.5, 0.4 + 0.6 * a))
+	ui.center(c, "♪ 音が出ます", 475.0, 14, Color(0.7, 0.7, 0.85))
+
 func _draw_menu(c: Control) -> void:
 	_bg(c)
 	_logo(c, 150.0)
 	ui.center(c, "ビートに乗って、デッキで生き残れ。", 280.0, 22, Color(0.85, 0.85, 1.0))
 	var labels := ["はじめる", "設定", "終了"]
-	var ids := ["start", "settings", "quit"]
-	for i in 3:
+	var ids := _menu_ids()
+	for i in ids.size():
 		var r := Rect2(W / 2.0 - 160.0, 330.0 + i * 70.0, 320.0, 56.0)
 		ui.button(c, ids[i], r, labels[i], true, Color(1.0, 0.8, 0.35) if i == menu_idx else Color(0.55, 0.5, 0.95), 26)
 		if ui.is_hover(ids[i]):

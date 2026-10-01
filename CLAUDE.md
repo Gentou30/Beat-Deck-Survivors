@@ -25,3 +25,8 @@ Hybrid of Vampire Survivors (auto-battle swarm), Slay the Spire (map run, deck, 
 - UI text is Japanese using DotGothic16 (OFL). Visuals + SFX are Kenney CC0, BGM is Joth CC0 (see assets/CREDITS.md). New external assets must be CC0/permissive and recorded there.
 - Avoid `:=` on Variant values (dict/array access) - GDScript treats that as a parse error.
 - Commit small, after `./tools/test.ps1` passes.
+
+## Web build
+- Templates: only `web_*` zips are installed (from Godot_v4.7.2-stable_export_templates.tpz) in `%APPDATA%\Godot\export_templates\4.7.2.stable`.
+- Export + zip: `./tools/export_web.ps1` (preset "Web" in export_presets.cfg, single-threaded, no COOP/COEP needed). Serve over http (not file://).
+- Web specifics: splash screen requires a click (browser audio policy) before music starts; Quit button hidden via `OS.has_feature("web")`; settings persist in IndexedDB.
