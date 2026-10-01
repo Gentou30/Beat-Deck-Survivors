@@ -1,4 +1,6 @@
 extends Node
+
+signal ach_unlocked(id: String)
 ## Persistent user settings + run statistics (user://settings.cfg). Autoload.
 
 const PATH := "user://settings.cfg"
@@ -10,7 +12,11 @@ var shake := true
 var fullscreen := false
 var tutorial_done := false
 var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
-var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0}
+var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0,
+	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1}
+var ach := {}
+var char_wins := {}
+var bosses := {}
 
 func _ready() -> void:
 	for n in ["Music", "SFX"]:
@@ -45,6 +51,14 @@ func load_cfg() -> void:
 	tutorial_done = cf.get_value("game", "tutorial_done", tutorial_done)
 	for k in stats:
 		stats[k] = cf.get_value("stats", k, stats[k])
+	for id in Achievements.DB:
+		if cf.get_value("ach", id, false):
+			ach[id] = true
+	for ch in Characters.DB:
+		char_wins[ch] = cf.get_value("char_wins", ch, 0)
+	for bn in ["bass", "drum", "metronome"]:
+		if cf.get_value("bosses", bn, false):
+			bosses[bn] = true
 
 func save_cfg() -> void:
 	for a in OS.get_cmdline_user_args():
@@ -60,4 +74,32 @@ func save_cfg() -> void:
 	cf.set_value("game", "tutorial_done", tutorial_done)
 	for k in stats:
 		cf.set_value("stats", k, stats[k])
+	for id in ach:
+		cf.set_value("ach", id, true)
+	for ch in char_wins:
+		cf.set_value("char_wins", ch, char_wins[ch])
+	for bn in bosses:
+		cf.set_value("bosses", bn, true)
 	cf.save(PATH)
+
+func _is_test() -> bool:
+	for a in OS.get_cmdline_user_args():
+		if a == "--autotest" or a.begins_with("--screen="):
+			return true
+	return false
+
+## Returns true if newly unlocked. (Tests never persist or toast.)
+func unlock(id: String) -> bool:
+	if ach.has(id) or not Achievements.DB.has(id):
+		return false
+	ach[id] = true
+	if not _is_test():
+		save_cfg()
+		ach_unlocked.emit(id)
+	return true
+
+func chars_unlocked() -> Array:
+	var out: Array = ["wizard", "knight", "ranger"]
+	if stats["wins"] >= 1:
+		out.append("drummer")
+	return out

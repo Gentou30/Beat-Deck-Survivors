@@ -10,6 +10,10 @@ const DB := {
 	"ranger": {"name": "レンジャー", "tile": 112, "hp": 62, "speed": 1.15, "color": Color(0.5, 0.95, 0.55),
 		"passive": "疾風", "passive_desc": "移動速度+15%。ビートごとの自動弾が2発になる。",
 		"starter": ["chain", "chain", "chain", "pulse", "pulse", "surge", "surge", "frenzy", "guard", "blades"]},
+	"drummer": {"name": "ドラマー", "tile": 86, "hp": 58, "speed": 1.0, "color": Color(1.0, 0.78, 0.35),
+		"passive": "リズムマスター", "passive_desc": "PERFECT判定の幅+25ms。コンボ1あたりのダメージ上昇+1%。",
+		"unlock": "ステージ攻略を1回クリアで解放",
+		"starter": ["drum", "drum", "pulse", "pulse", "chain", "guard", "guard", "sonic", "surge", "frenzy"]},
 }
 
-const ORDER := ["wizard", "knight", "ranger"]
+const ORDER := ["wizard", "knight", "ranger", "drummer"]

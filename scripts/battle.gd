@@ -150,6 +150,7 @@ var cur_base := Transform2D.IDENTITY
 var player_vel := Vector2.ZERO
 var facing := 1.0
 var _muffled := false
+var took_damage := false
 var end_timer := 0.0
 var end_won := false
 var elapsed := 0.0
@@ -217,13 +218,13 @@ func dispose() -> void:
 # ---- helpers ---------------------------------------------------------------
 
 func perfect_window() -> float:
-	return PERFECT_BASE + (0.02 if run.has_relic("metronome") else 0.0)
+	return PERFECT_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
 
 func good_window() -> float:
-	return GOOD_BASE + (0.02 if run.has_relic("metronome") else 0.0)
+	return GOOD_BASE + (0.02 if run.has_relic("metronome") else 0.0) + (0.025 if run.char_id == "drummer" else 0.0)
 
 func dmg_mult() -> float:
-	var per := 0.03 if run.has_relic("amp") else 0.02
+	var per := (0.03 if run.has_relic("amp") else 0.02) + (0.01 if run.char_id == "drummer" else 0.0)
 	return (2.0 if frenzy_beats > 0 else 1.0) * (1.5 if fever_beats > 0 else 1.0) * (1.0 + minf(combo, 20.0) * per)
 
 const THEMES := [
@@ -251,6 +252,8 @@ func _add_fever(v: float) -> void:
 		_start_fever()
 
 func _start_fever() -> void:
+	Settings.stats["fevers"] += 1
+	Settings.unlock("fever")
 	fever_beats = 8
 	fever_gauge = 0.0
 	banner = "FEVER!!"
@@ -403,6 +406,11 @@ func _make_enemy(k: String) -> Enemy:
 			e.dmg = 4 + int(d)
 			e.color = Color(0.4, 1.0, 0.8)
 			e.tex = tex(108)
+	var hpm := 1.0 + 0.1 * run.asc + (0.25 if run.mod_id == 1 else 0.0)
+	if k == "boss" and run.asc >= 4:
+		hpm *= 1.25
+	e.max_hp *= hpm
+	e.speed *= 1.0 + 0.04 * maxi(0, run.asc - 1)
 	e.hp = e.max_hp
 	e.phase = randf() * TAU
 	return e
@@ -835,6 +843,11 @@ func _on_kill(e: Enemy) -> void:
 	burst(e.pos, e.color, 14 if e.radius < 25.0 else 40, 220.0, 0.6, 5.0, 120.0)
 	ring(e.pos, e.radius * 2.2, e.color, 0.25)
 	if e.kind == "boss":
+		Settings.bosses[e.boss_id] = true
+		if Settings.bosses.size() >= 3:
+			Settings.unlock("boss3")
+		if not took_damage:
+			Settings.unlock("flawless")
 		hitstop = 0.3
 		do_shake(22.0)
 		flash(Color(1, 1, 1), 0.7)
@@ -900,6 +913,8 @@ func damage_player(d: int) -> void:
 	shield -= absorbed
 	var real := d - absorbed
 	run.hp -= real
+	if real > 0:
+		took_damage = true
 	run.dmg_taken += real
 	burst(player_pos, Color(1, 0.3, 0.3), 16, 240.0, 0.5, 5.0)
 	if absorbed > 0:
@@ -927,6 +942,7 @@ func use_potion(i: int) -> void:
 		return
 	var id: String = run.potions[i]
 	run.potions.remove_at(i)
+	Settings.unlock("potion")
 	var col: Color = Potions.DB[id]["color"]
 	float_text(player_pos + Vector2(0, -74), String(Potions.DB[id]["name"]), col, 18, 1.0)
 	burst(player_pos, col, 22, 230.0, 0.6, 4.0)
@@ -1069,7 +1085,13 @@ func try_play(slot: int) -> void:
 	Conductor.play_sfx(grade.to_lower(), pitch)
 	Conductor.play_sfx("card", randf_range(0.94, 1.08))
 	plays += 1
+	Settings.stats["best_combo"] = maxi(Settings.stats["best_combo"], combo)
+	if combo >= 10:
+		Settings.unlock("combo10")
+	if combo >= 20:
+		Settings.unlock("combo20")
 	if grade == "PERFECT":
+		Settings.stats["perfects"] += 1
 		perfects += 1
 	last_off = so
 	last_off_t = 1.3

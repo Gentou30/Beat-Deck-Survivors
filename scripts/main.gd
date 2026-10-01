@@ -6,7 +6,7 @@ const H := 720.0
 const SL_X := 480.0
 const SL_W := 420.0
 
-enum S { SPLASH, MENU, MODE, CHAR, SETTINGS, CALIB, MAP, BATTLE, REWARD, REST, PICK, SHOP, EVENT, TREASURE, END }
+enum S { SPLASH, MENU, MODE, CHAR, SETTINGS, RECORDS, CALIB, MAP, BATTLE, REWARD, REST, PICK, SHOP, EVENT, TREASURE, END }
 
 const NODE_COL := {
 	"battle": Color(0.9, 0.35, 0.35), "elite": Color(1.0, 0.6, 0.2), "rest": Color(0.4, 0.85, 0.5),
@@ -32,6 +32,8 @@ var menu_idx := 0
 var settings_return: S = S.MENU
 var sel_mode := "run"
 var sel_char := 0
+var sel_asc := 0
+var toasts: Array = []
 var bg_parts: Array = []
 var drag_id := ""
 var touch_mode := false
@@ -86,6 +88,9 @@ func _ready() -> void:
 	hud.game = self
 	layer.add_child(hud)
 	Conductor.beat.connect(func(_n: int) -> void: menu_pulse = 1.0)
+	Settings.ach_unlocked.connect(func(id: String) -> void:
+		toasts.append({"id": id, "t": 4.0})
+		Conductor.play_sfx("win"))
 	for i in 50:
 		bg_parts.append([Vector2(randf() * W, randf() * H), 10.0 + randf() * 40.0, 2.0 + randf() * 4.0, randf()])
 	var args := OS.get_cmdline_user_args()
@@ -102,8 +107,14 @@ func _ready() -> void:
 		Engine.time_scale = 5.0 if _shot_path == "" else 1.0
 		if "--tutorial" in args:
 			start_tutorial()
+		elif "--daily" in args:
+			start_daily()
 		else:
-			start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % 3])
+			var asc_arg := 0
+			for a in args:
+				if a.begins_with("--asc="):
+					asc_arg = int(a.substr(6))
+			start_run("endless" if "--endless" in args else "run", Characters.ORDER[randi() % Characters.ORDER.size()], asc_arg)
 	elif _screen_arg != "":
 		_debug_screen(_screen_arg)
 
@@ -122,9 +133,20 @@ func goto(s: S) -> void:
 		fade = 0.0
 		_on_enter(s)
 
-func start_run(mode: String, char_id: String) -> void:
+func start_daily() -> void:
+	var d := Time.get_date_dict_from_system()
+	var day := int(d["year"]) * 10000 + int(d["month"]) * 100 + int(d["day"])
 	run = RunState.new()
-	run.setup(mode, char_id)
+	run.setup_daily(day)
+	paused = false
+	deck_view = false
+	endless_queue.clear()
+	Settings.stats["runs"] += 1
+	goto(S.MAP)
+
+func start_run(mode: String, char_id: String, asc := 0) -> void:
+	run = RunState.new()
+	run.setup(mode, char_id, asc)
 	paused = false
 	deck_view = false
 	endless_queue.clear()
@@ -164,6 +186,7 @@ func _on_battle_done(won: bool, kind: String) -> void:
 	battle.dispose()
 	if kind == "tutorial":
 		if won:
+			Settings.unlock("tutorial")
 			Settings.tutorial_done = true
 			Settings.save_cfg()
 		goto(S.MENU)
@@ -197,18 +220,49 @@ func _on_battle_done(won: bool, kind: String) -> void:
 func _end_run(won: bool) -> void:
 	end_won = won
 	var st: Dictionary = Settings.stats
+	st["total_kills"] += run.kills
+	if st["total_kills"] >= 1000:
+		Settings.unlock("kills1000")
 	if run.mode == "run":
-		st["best_floor"] = maxi(st["best_floor"], run.floor_idx + (1 if won else 0))
+		var reached: int = run.floor_idx + (1 if won else 0)
+		st["best_floor"] = maxi(st["best_floor"], reached)
+		if run.daily:
+			var d := Time.get_date_dict_from_system()
+			var day := int(d["year"]) * 10000 + int(d["month"]) * 100 + int(d["day"])
+			if st["daily_day"] != day:
+				st["daily_day"] = day
+				st["daily_best"] = -1
+			st["daily_best"] = maxi(st["daily_best"], reached)
 		if won:
 			st["wins"] += 1
+			Settings.unlock("first_clear")
+			Settings.char_wins[run.char_id] = int(Settings.char_wins.get(run.char_id, 0)) + 1
+			if run.daily:
+				Settings.unlock("daily")
+			elif run.asc >= st["asc_unlocked"] and st["asc_unlocked"] < 5:
+				st["asc_unlocked"] = run.asc + 1
+			if run.asc >= 3:
+				Settings.unlock("asc3")
+			var all_ok := true
+			for cid in Characters.ORDER:
+				if int(Settings.char_wins.get(cid, 0)) < 1:
+					all_ok = false
+			if all_ok:
+				Settings.unlock("allchars")
 	else:
 		st["endless_best"] = maxi(st["endless_best"], run.wave)
+		if run.wave >= 10:
+			Settings.unlock("endless10")
+		if run.wave >= 20:
+			Settings.unlock("endless20")
 	st["best_kills"] = maxi(st["best_kills"], run.kills)
 	Settings.save_cfg()
 	goto(S.END)
 
 func proceed() -> void:
 	deck_view = false
+	if run.deck.size() >= 25:
+		Settings.unlock("deck25")
 	if run.mode == "run":
 		goto(S.MAP)
 		return
@@ -333,7 +387,7 @@ func _event_choice(e: String) -> void:
 # ---- input -----------------------------------------------------------------
 
 func _menu_ids() -> Array:
-	return ["start", "tutorial", "settings"] if OS.has_feature("web") else ["start", "tutorial", "settings", "quit"]
+	return ["start", "tutorial", "records", "settings"] if OS.has_feature("web") else ["start", "tutorial", "records", "settings", "quit"]
 
 func _begin() -> void:
 	# Browsers only allow audio after a user gesture, so music starts here.
@@ -516,16 +570,27 @@ func _click(id: String) -> void:
 			get_tree().quit()
 		"mode:run", "mode:endless":
 			sel_mode = id.substr(5)
+			sel_asc = mini(sel_asc, Settings.stats["asc_unlocked"])
 			goto(S.CHAR)
+		"mode:daily":
+			start_daily()
+		"records":
+			goto(S.RECORDS)
+		"asc-":
+			sel_asc = maxi(0, sel_asc - 1)
+		"asc+":
+			sel_asc = mini(mini(5, Settings.stats["asc_unlocked"]), sel_asc + 1)
 		"back":
 			match state:
 				S.MODE: goto(S.MENU)
 				S.CHAR: goto(S.MODE)
 				S.SETTINGS: goto(settings_return)
+				S.RECORDS: goto(S.MENU)
 				S.CALIB: goto(S.SETTINGS)
 				S.PICK: goto(pick_return)
 		"go":
-			start_run(sel_mode, Characters.ORDER[sel_char])
+			if Characters.ORDER[sel_char] in Settings.chars_unlocked():
+				start_run(sel_mode, Characters.ORDER[sel_char], sel_asc if sel_mode == "run" else 0)
 		"menu":
 			if battle:
 				battle.dispose()
@@ -615,7 +680,8 @@ func _click_prefixed(id: String) -> void:
 	elif id.begins_with("node:"):
 		_enter_node(int(id.substr(5)))
 	elif id.begins_with("char:"):
-		sel_char = int(id.substr(5))
+		if Characters.ORDER[int(id.substr(5))] in Settings.chars_unlocked():
+			sel_char = int(id.substr(5))
 	elif id.begins_with("buy:c"):
 		var it: Dictionary = shop_cards[int(id.substr(5))]
 		if not it["sold"] and run.gold >= it["price"]:
@@ -689,6 +755,9 @@ func _calib_tap() -> void:
 func _process(delta: float) -> void:
 	t += delta
 	menu_pulse = maxf(0.0, menu_pulse - delta * 4.0)
+	for tt in toasts:
+		tt["t"] -= delta
+	toasts = toasts.filter(func(x: Dictionary) -> bool: return x["t"] > 0.0)
 	if pending >= 0:
 		fade += delta * 7.0
 		if fade >= 1.0:
@@ -731,6 +800,7 @@ func draw_hud(c: Control) -> void:
 		S.MODE: _draw_mode(c)
 		S.CHAR: _draw_char(c)
 		S.SETTINGS: _draw_settings(c)
+		S.RECORDS: _draw_records(c)
 		S.CALIB: _draw_calib(c)
 		S.MAP: _draw_map(c)
 		S.BATTLE:
@@ -748,6 +818,7 @@ func draw_hud(c: Control) -> void:
 		S.END: _draw_end(c)
 	if deck_view:
 		_draw_deck_overlay(c)
+	_draw_toasts(c)
 	if state == S.BATTLE and not paused:
 		_draw_joystick(c)
 	var ws := DisplayServer.window_get_size()
@@ -806,10 +877,10 @@ func _draw_menu(c: Control) -> void:
 	_bg(c)
 	_logo(c, 130.0)
 	ui.center(c, "ビートに乗って、デッキで生き残れ。", 262.0, 22, Color(0.85, 0.85, 1.0))
-	var names := {"start": "はじめる", "tutorial": "あそびかた", "settings": "設定", "quit": "終了"}
+	var names := {"start": "はじめる", "tutorial": "あそびかた", "records": "記録・実績", "settings": "設定", "quit": "終了"}
 	var ids := _menu_ids()
 	for i in ids.size():
-		var r := Rect2(W / 2.0 - 160.0, 310.0 + i * 62.0, 320.0, 52.0)
+		var r := Rect2(W / 2.0 - 160.0, 300.0 + i * 56.0, 320.0, 48.0)
 		var acc := Color(1.0, 0.8, 0.35) if i == menu_idx else Color(0.55, 0.5, 0.95)
 		if ids[i] == "tutorial" and not Settings.tutorial_done:
 			acc = Color(0.5, 1.0, 0.6)
@@ -818,7 +889,7 @@ func _draw_menu(c: Control) -> void:
 			ui.text(c, "NEW! はじめての方はここから", Vector2(r.end.x + 14.0, r.position.y + 32.0), 14, Color(0.6, 1.0, 0.7, 0.75 + 0.25 * sin(t * 5.0)))
 		if ui.is_hover(ids[i]):
 			menu_idx = i
-	_dancers(c, 590.0)
+	_dancers(c, 595.0)
 	var st: Dictionary = Settings.stats
 	ui.center(c, "プレイ %d回   クリア %d回   最高到達 %d階   エンドレス最高 %dウェーブ   最多撃破 %d" % [st["runs"], st["wins"], st["best_floor"], st["endless_best"], st["best_kills"]], 678.0, 14, Color(0.7, 0.7, 0.85))
 	ui.text(c, "CC0素材: Kenney / Joth", Vector2(16, H - 12), 11, Color(0.5, 0.5, 0.65))
@@ -826,53 +897,115 @@ func _draw_menu(c: Control) -> void:
 
 func _draw_mode(c: Control) -> void:
 	_bg(c)
-	ui.center(c, "モード選択", 100.0, 44, Color(1, 0.9, 0.6))
+	ui.center(c, "モード選択", 90.0, 44, Color(1, 0.9, 0.6))
+	var d := Time.get_date_dict_from_system()
+	var day := int(d["year"]) * 10000 + int(d["month"]) * 100 + int(d["day"])
+	var dmod: int = day % 3
 	var modes := [
-		["mode:run", "ステージ攻略", "10階層のマップを進み、最上階のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\nデッキとレリックを育てる本格モード。", Color(0.9, 0.5, 0.4), 84],
-		["mode:endless", "エンドレス", "ウェーブが延々と続くサバイバル。\n勝ち抜くごとにカード報酬、時々ショップと休憩。\nどこまで生き延びられる？", Color(0.5, 0.8, 1.0), 108],
+		["mode:run", "ステージ攻略", "10階層のマップを進み、最上階のボスを倒せ。\nバトル・エリート・休憩・ショップ・イベント・宝箱。\n難易度(アセンション)で何度も挑める。", Color(0.9, 0.5, 0.4), 84,
+			"クリア %d回 / 最高 %d階" % [Settings.stats["wins"], Settings.stats["best_floor"]]],
+		["mode:endless", "エンドレス", "ウェーブが延々と続くサバイバル。\n勝ち抜くごとにカード報酬。\n10ウェーブごとにボスが出現！", Color(0.5, 0.8, 1.0), 108,
+			"最高 %dウェーブ" % Settings.stats["endless_best"]],
+		["mode:daily", "デイリーラン", "今日だけの固定マップ・キャラ・特殊ルール。\n本日のルール:\n" + RunState.MOD_NAMES[dmod], Color(1.0, 0.85, 0.3), 86,
+			("今日の記録: %d階" % (int(Settings.stats["daily_best"]) + 1)) if (Settings.stats["daily_day"] == day and Settings.stats["daily_best"] >= 0) else "今日は未挑戦"],
 	]
-	for i in 2:
+	for i in 3:
 		var m: Array = modes[i]
-		var r := Rect2(190.0 + i * 450.0, 170.0, 410.0, 380.0)
+		var r := Rect2(70.0 + i * 385.0, 160.0, 350.0, 400.0)
 		ui.button(c, m[0], r, "", true, m[3])
-		c.draw_texture_rect(tex(m[4]), Rect2(r.position.x + r.size.x / 2.0 - 48.0, r.position.y + 30.0 - absf(sin(t * 3.0 + i)) * 8.0, 96, 96), false)
-		ui.text(c, m[1], Vector2(r.position.x, r.position.y + 170.0), 34, m[3], HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 24.0, r.position.y + 220.0), m[2], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 48.0, 17, -1, Color(0.9, 0.9, 0.95))
-		if i == 0:
-			ui.text(c, "クリア %d回 / 最高 %d階" % [Settings.stats["wins"], Settings.stats["best_floor"]], Vector2(r.position.x, r.position.y + 350.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		else:
-			ui.text(c, "最高 %dウェーブ" % Settings.stats["endless_best"], Vector2(r.position.x, r.position.y + 350.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		c.draw_texture_rect(tex(m[4]), Rect2(r.position.x + r.size.x / 2.0 - 48.0, r.position.y + 26.0 - absf(sin(t * 3.0 + i)) * 8.0, 96, 96), false)
+		ui.text(c, m[1], Vector2(r.position.x, r.position.y + 165.0), 32, m[3], HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		c.draw_multiline_string(font_res, Vector2(r.position.x + 20.0, r.position.y + 212.0), m[2], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 40.0, 16, -1, Color(0.9, 0.9, 0.95))
+		ui.text(c, m[5], Vector2(r.position.x, r.position.y + 375.0), 14, Color(0.8, 0.8, 0.9), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	if not Settings.tutorial_done:
-		ui.center(c, "初めての方は、メニューの『あそびかた』でリズムの基本を練習できます", 600.0, 16, Color(0.6, 1.0, 0.7))
+		ui.center(c, "初めての方は、メニューの『あそびかた』でリズムの基本を練習できます", 610.0, 16, Color(0.6, 1.0, 0.7))
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
 
 func _draw_char(c: Control) -> void:
 	_bg(c)
-	ui.center(c, "キャラクター選択", 80.0, 44, Color(1, 0.9, 0.6))
-	for i in 3:
-		var cd: Dictionary = Characters.DB[Characters.ORDER[i]]
-		var col: Color = cd["color"]
-		var r := Rect2(70.0 + i * 385.0, 120.0, 350.0, 450.0)
+	ui.center(c, "キャラクター選択", 66.0, 40, Color(1, 0.9, 0.6))
+	var n := Characters.ORDER.size()
+	var pw := 290.0
+	var gap := 14.0
+	var x0 := (W - (n * pw + (n - 1) * gap)) / 2.0
+	var unl := Settings.chars_unlocked()
+	for i in n:
+		var cid: String = Characters.ORDER[i]
+		var cd: Dictionary = Characters.DB[cid]
+		var ok := cid in unl
+		var col: Color = cd["color"] if ok else Color(0.4, 0.4, 0.45)
+		var r := Rect2(x0 + i * (pw + gap), 100.0, pw, 400.0)
 		var sel := i == sel_char
-		ui.button(c, "char:%d" % i, r, "", true, col)
+		ui.button(c, "char:%d" % i, r, "", ok, col)
 		if sel:
 			c.draw_rect(r.grow(5.0), Color(col, 0.5 + 0.4 * menu_pulse), false, 4.0)
 		var bob := absf(sin(t * 4.0 + i)) * (14.0 if sel else 3.0)
-		c.draw_texture_rect(tex(int(cd["tile"])), Rect2(r.position.x + r.size.x / 2.0 - 56.0, r.position.y + 24.0 - bob, 112, 112), false)
-		ui.text(c, cd["name"], Vector2(r.position.x, r.position.y + 175.0), 32, col, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		ui.text(c, "HP %d    速度 %d%%" % [cd["hp"], int(float(cd["speed"]) * 100.0)], Vector2(r.position.x, r.position.y + 205.0), 17, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-		ui.text(c, "◆ " + cd["passive"], Vector2(r.position.x + 20.0, r.position.y + 245.0), 18, Color(1, 0.9, 0.5))
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 20.0, r.position.y + 270.0), cd["passive_desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 15, -1, Color(0.9, 0.9, 0.95))
+		var sp := Rect2(r.position.x + r.size.x / 2.0 - 48.0, r.position.y + 20.0 - bob, 96, 96)
+		c.draw_texture_rect(tex(int(cd["tile"])), sp, false, Color.WHITE if ok else Color(0, 0, 0, 0.8))
+		if not ok:
+			ui.text(c, "？？？", Vector2(r.position.x, r.position.y + 160.0), 30, col, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+			ui.text(c, "ロック中", Vector2(r.position.x, r.position.y + 200.0), 18, Color(1, 0.8, 0.5), HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+			c.draw_multiline_string(font_res, Vector2(r.position.x + 16.0, r.position.y + 240.0), cd["unlock"], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 32.0, 15, -1, Color(0.8, 0.8, 0.85))
+			continue
+		ui.text(c, cd["name"], Vector2(r.position.x, r.position.y + 158.0), 28, col, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		ui.text(c, "HP %d   速度 %d%%   クリア%d回" % [cd["hp"], int(float(cd["speed"]) * 100.0), int(Settings.char_wins.get(cid, 0))], Vector2(r.position.x, r.position.y + 184.0), 13, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		ui.text(c, "◆ " + cd["passive"], Vector2(r.position.x + 14.0, r.position.y + 218.0), 16, Color(1, 0.9, 0.5))
+		c.draw_multiline_string(font_res, Vector2(r.position.x + 14.0, r.position.y + 240.0), cd["passive_desc"], HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 13, -1, Color(0.9, 0.9, 0.95))
 		var counts := {}
 		for id in cd["starter"]:
 			counts[id] = counts.get(id, 0) + 1
 		var line := ""
 		for id in counts:
 			line += "%s×%d  " % [Cards.def(id)["name"], counts[id]]
-		ui.text(c, "初期デッキ", Vector2(r.position.x + 20.0, r.position.y + 335.0), 14, Color(0.7, 0.8, 1.0))
-		c.draw_multiline_string(font_res, Vector2(r.position.x + 20.0, r.position.y + 358.0), line, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 40.0, 13, -1, Color(0.85, 0.85, 0.9))
+		ui.text(c, "初期デッキ", Vector2(r.position.x + 14.0, r.position.y + 305.0), 13, Color(0.7, 0.8, 1.0))
+		c.draw_multiline_string(font_res, Vector2(r.position.x + 14.0, r.position.y + 325.0), line, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 28.0, 12, -1, Color(0.85, 0.85, 0.9))
+	if sel_mode == "run":
+		var au: int = Settings.stats["asc_unlocked"]
+		ui.button(c, "asc-", Rect2(W / 2.0 - 330.0, 530.0, 50.0, 40.0), "◀", sel_asc > 0, Color(0.6, 0.6, 0.9), 20)
+		ui.button(c, "asc+", Rect2(W / 2.0 + 280.0, 530.0, 50.0, 40.0), "▶", sel_asc < mini(5, au), Color(0.6, 0.6, 0.9), 20)
+		ui.text(c, "アセンション %d" % sel_asc, Vector2(0, 556.0), 22, Color(1, 0.7, 0.4), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.text(c, RunState.ASC_TEXT[sel_asc] + ("" if au >= 5 else "  (クリアで次の段階が解放)"), Vector2(0, 582.0), 14, Color(0.85, 0.85, 0.95), HORIZONTAL_ALIGNMENT_CENTER, W)
 	ui.button(c, "back", Rect2(40, H - 80, 160, 48), "もどる", true, Color(0.6, 0.6, 0.8), 20)
-	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", true, Color(1.0, 0.8, 0.35), 30)
+	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", Characters.ORDER[sel_char] in unl, Color(1.0, 0.8, 0.35), 30)
+
+func _draw_records(c: Control) -> void:
+	_bg(c)
+	ui.center(c, "記録・実績", 76.0, 40, Color(1, 0.9, 0.6))
+	var st: Dictionary = Settings.stats
+	var lines := [
+		"プレイ回数: %d" % st["runs"], "クリア回数: %d" % st["wins"], "最高到達階: %d" % st["best_floor"],
+		"エンドレス最高: %dウェーブ" % st["endless_best"], "1ランの最多撃破: %d" % st["best_kills"], "累計撃破: %d" % st["total_kills"],
+		"最高コンボ: %d" % st["best_combo"], "PERFECT累計: %d" % st["perfects"], "フィーバー発動: %d回" % st["fevers"],
+		"解放済みアセンション: %d" % st["asc_unlocked"],
+	]
+	ui.panel(c, Rect2(60, 120, 340, 420))
+	for i in lines.size():
+		ui.text(c, lines[i], Vector2(80, 160 + i * 36), 17, Color.WHITE)
+	var cnt := 0
+	for id in Achievements.ORDER:
+		if Settings.ach.has(id):
+			cnt += 1
+	ui.text(c, "実績 %d / %d" % [cnt, Achievements.ORDER.size()], Vector2(430, 140), 20, Color(1, 0.9, 0.5))
+	for i in Achievements.ORDER.size():
+		var id: String = Achievements.ORDER[i]
+		var got := Settings.ach.has(id)
+		var r := Rect2(430.0 + (i % 2) * 410.0, 156.0 + (i / 2) * 50.0, 400.0, 44.0)
+		c.draw_rect(r, Color(0.2, 0.17, 0.05, 0.9) if got else Color(0.1, 0.1, 0.15, 0.85))
+		c.draw_rect(r, Color(1, 0.85, 0.3) if got else Color(0.35, 0.35, 0.45), false, 2.0)
+		ui.text(c, ("★ " if got else "☆ ") + Achievements.DB[id]["name"], r.position + Vector2(10, 19), 16, Color(1, 0.92, 0.55) if got else Color(0.6, 0.6, 0.7))
+		ui.text(c, Achievements.DB[id]["desc"], r.position + Vector2(10, 37), 11, Color(0.85, 0.85, 0.9) if got else Color(0.5, 0.5, 0.6))
+	ui.button(c, "back", Rect2(W / 2.0 - 100.0, H - 70.0, 200.0, 48), "もどる", true, Color(0.55, 0.5, 0.95), 22)
+
+func _draw_toasts(c: Control) -> void:
+	for i in toasts.size():
+		var tt: Dictionary = toasts[i]
+		var k := minf(1.0, float(tt["t"]) * 3.0) * minf(1.0, (4.0 - float(tt["t"])) * 4.0)
+		var r := Rect2(W / 2.0 - 190.0, -60.0 + 78.0 * k + i * 64.0, 380.0, 56.0)
+		c.draw_rect(Rect2(r.position + Vector2(3, 4), r.size), Color(0, 0, 0, 0.5))
+		c.draw_rect(r, Color(0.16, 0.12, 0.03, 0.97))
+		c.draw_rect(r, Color(1, 0.85, 0.3), false, 3.0)
+		ui.text(c, "実績解除！", r.position + Vector2(14, 22), 13, Color(1, 0.85, 0.4))
+		ui.text(c, "★ " + Achievements.DB[tt["id"]]["name"], r.position + Vector2(14, 44), 20, Color.WHITE)
 
 func _draw_settings(c: Control) -> void:
 	_bg(c)
@@ -1210,6 +1343,7 @@ func _debug_screen(sname: String) -> void:
 		"mode": state = S.MODE
 		"char": state = S.CHAR
 		"settings": state = S.SETTINGS
+		"records": state = S.RECORDS
 		"map": state = S.MAP
 		"reward":
 			reward_cards = ["heavy", "echo", "aura"]
