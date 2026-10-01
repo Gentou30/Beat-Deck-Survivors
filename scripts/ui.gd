@@ -47,8 +47,60 @@ func button_hit(_c: Control, id: String, r: Rect2) -> bool:
 func ds(c: CanvasItem, pos: Vector2, s: String, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, size := 16, col := Color.WHITE) -> void:
 	c.draw_string(font, pos, Loc.t(s), align, width, size, col)
 
+const NO_LINE_START := "、。，．」』）)！？!?,.:;ー・"
+var _wrap_cache := {}
+
+## Greedy wrapper: breaks at spaces (Latin) or between any two characters (Japanese), keeps
+## closing punctuation off the start of a line. Godot's built-in wrapping needs ICU data, which web builds lack.
+func wrap_lines(s: String, width: float, size: int) -> Array:
+	var key := "%s|%d|%d" % [s, int(width), size]
+	if _wrap_cache.has(key):
+		return _wrap_cache[key]
+	var out: Array = []
+	for para in s.split("\n"):
+		var line := ""
+		var last_space := -1
+		for ch in para:
+			var test := line + ch
+			if line != "" and font.get_string_size(test, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
+				if ch == " ":
+					out.append(line)
+					line = ""
+					last_space = -1
+					continue
+				if NO_LINE_START.contains(ch):
+					line = test
+					continue
+				if last_space > 0 and ch.unicode_at(0) < 128:
+					out.append(line.substr(0, last_space))
+					line = line.substr(last_space + 1) + ch
+				else:
+					out.append(line)
+					line = ch
+				last_space = -1
+			else:
+				line = test
+			if ch == " ":
+				last_space = line.length() - 1
+		out.append(line)
+	if _wrap_cache.size() > 600:
+		_wrap_cache.clear()
+	_wrap_cache[key] = out
+	return out
+
 func dms(c: CanvasItem, pos: Vector2, s: String, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, size := 16, max_lines := -1, col := Color.WHITE) -> void:
-	c.draw_multiline_string(font, pos, Loc.t(s), align, width, size, max_lines, col)
+	var lines := wrap_lines(Loc.t(s), width if width > 0.0 else 100000.0, size)
+	var lh := size * 1.28
+	for i in lines.size():
+		if max_lines > 0 and i >= max_lines:
+			break
+		c.draw_string(font, pos + Vector2(0, i * lh), lines[i], align, width, size, col)
+
+## Filled triangle arrow (the font has no U+25B6 / U+25C0).
+func arrow(c: CanvasItem, center: Vector2, dir: int, size: float, col: Color) -> void:
+	var s := size * 0.5
+	var d := float(dir)
+	c.draw_colored_polygon(PackedVector2Array([center + Vector2(-s * 0.7 * d, -s), center + Vector2(s * 0.9 * d, 0), center + Vector2(-s * 0.7 * d, s)]), col)
 
 func tile(i: int) -> Texture2D:
 	if not _tiles.has(i):
@@ -85,6 +137,9 @@ func button(c: Control, id: String, r: Rect2, label: String, enabled := true, ac
 		bc = bc.lerp(Color.WHITE, 0.35 + 0.25 * pulse)
 	c.draw_rect(rr, bc, false, 3.0 if h else 2.0)
 	var col := Color.WHITE if enabled else Color(0.55, 0.55, 0.6)
+	if label == "◀" or label == "▶":
+		arrow(c, rr.get_center(), -1 if label == "◀" else 1, size, col)
+		return
 	ds(c, Vector2(rr.position.x, rr.position.y + rr.size.y / 2.0 + size * 0.35), label, HORIZONTAL_ALIGNMENT_CENTER, rr.size.x, size, col)
 
 func bar(c: Control, r: Rect2, frac: float, fill: Color, back := Color(0.12, 0.06, 0.1)) -> void:
@@ -123,7 +178,7 @@ func card(c: Control, id: String, r: Rect2, key: String, usable := true, sel := 
 	var nm_col := Color(0.6, 1.0, 0.6, dim) if d["up"] else Color(1, 1, 1, dim)
 	ds(c, rr.position + Vector2(34, 25), d["name"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 40.0, 13, nm_col)
 	ds(c, rr.position + Vector2(10, 56), Cards.TYPE_JA[d["type"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(col, dim))
-	dms(c, rr.position + Vector2(10, 84), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 14, -1, Color(0.9, 0.9, 0.95, dim))
+	dms(c, rr.position + Vector2(10, 88), d["desc"], HORIZONTAL_ALIGNMENT_LEFT, rr.size.x - 20.0, 13, 8, Color(0.9, 0.9, 0.95, dim))
 	var art_r := Rect2(rr.end.x - 46.0, rr.position.y + 40.0, 32.0, 32.0)
 	c.draw_circle(art_r.get_center(), 19.0, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.7 * dim))
 	c.draw_texture_rect(tile(Cards.art(id)), art_r, false, Color(1, 1, 1, dim))

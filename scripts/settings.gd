@@ -16,12 +16,48 @@ var reduce_flash := false
 var assist := 0  # 0 off, 1 wide, 2 very wide timing windows
 var clap_on := true
 var clap_vol := 0.7
-var clap_type := 0
+var clap_type := 1  # rimshot
 var clap_pat := 0  # 0 every beat, 1 beats 2 & 4 only
 var bgm := -1  # -1 = random per battle, else Conductor.TRACKS index
 var stats := {"runs": 0, "wins": 0, "best_floor": 0, "endless_best": 0, "best_kills": 0,
 	"asc_unlocked": 0, "best_combo": 0, "fevers": 0, "perfects": 0, "total_kills": 0, "daily_day": 0, "daily_best": -1, "act1": 0, "full_clears": 0}
 var ach := {}
+var keymap := {}  # action -> [primary, secondary] keycodes (0 = unbound)
+
+const ACTIONS := ["card1", "card2", "card3", "card4", "card5", "potion1", "potion2", "potion3", "potion4", "up", "down", "left", "right", "pause"]
+
+func default_keys() -> Dictionary:
+	return {
+		"card1": [KEY_1, 0], "card2": [KEY_2, 0], "card3": [KEY_3, 0], "card4": [KEY_4, 0], "card5": [KEY_5, 0],
+		"potion1": [KEY_6, KEY_Z], "potion2": [KEY_7, KEY_X], "potion3": [KEY_8, KEY_C], "potion4": [KEY_9, KEY_V],
+		"up": [KEY_W, KEY_UP], "down": [KEY_S, KEY_DOWN], "left": [KEY_A, KEY_LEFT], "right": [KEY_D, KEY_RIGHT],
+		"pause": [KEY_P, 0],
+	}
+
+func reset_keys() -> void:
+	keymap = default_keys()
+
+func key_pressed(action: String) -> bool:
+	for k in keymap.get(action, []):
+		if k != 0 and Input.is_key_pressed(k):
+			return true
+	return false
+
+func action_for_key(k: int) -> String:
+	for a in ACTIONS:
+		if k in keymap[a]:
+			return a
+	return ""
+
+func bind(action: String, slot: int, k: int) -> void:
+	for a in ACTIONS:
+		for i in 2:
+			if keymap[a][i] == k:
+				keymap[a][i] = 0
+	keymap[action][slot] = k
+
+func key_name(k: int) -> String:
+	return "-" if k == 0 else OS.get_keycode_string(k)
 var char_wins := {}
 var bosses := {}
 
@@ -37,6 +73,7 @@ func _ready() -> void:
 	AudioServer.add_bus_effect(mi, lp, 0)
 	AudioServer.set_bus_effect_enabled(mi, 0, false)
 	lang = "ja" if OS.get_locale_language() == "ja" else "en"
+	reset_keys()
 	load_cfg()
 	apply()
 
@@ -66,6 +103,13 @@ func load_cfg() -> void:
 	assist = cf.get_value("game", "assist", assist)
 	for k in stats:
 		stats[k] = cf.get_value("stats", k, stats[k])
+	for a in ACTIONS:
+		if cf.has_section_key("keys", a):
+			var kv = cf.get_value("keys", a)
+			if kv is Array and kv.size() == 2:
+				keymap[a] = [int(kv[0]), int(kv[1])]
+	if int(cf.get_value("game", "version", 1)) < 2:
+		clap_type = 1  # new default: rimshot
 	for id in Achievements.DB:
 		if cf.get_value("ach", id, false):
 			ach[id] = true
@@ -96,6 +140,9 @@ func save_cfg() -> void:
 	cf.set_value("game", "assist", assist)
 	for k in stats:
 		cf.set_value("stats", k, stats[k])
+	cf.set_value("game", "version", 2)
+	for a in ACTIONS:
+		cf.set_value("keys", a, keymap[a])
 	for id in ach:
 		cf.set_value("ach", id, true)
 	for ch in char_wins:

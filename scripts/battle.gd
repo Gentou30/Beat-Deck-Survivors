@@ -154,6 +154,9 @@ var player_vel := Vector2.ZERO
 var facing := 1.0
 var _muffled := false
 var started := false
+var _last_play_ms := -1000
+var _last_potion_ms := -1000
+const LANE_X := 420.0
 var count_n := 0
 var count_t := 0.0
 var intro_banner := ""
@@ -805,8 +808,8 @@ func move_dir() -> Vector2:
 	if jv.length() > 0.0:
 		return jv.limit_length(1.0)
 	return Vector2(
-		float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
-		float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)))
+		float(Settings.key_pressed("right")) - float(Settings.key_pressed("left")),
+		float(Settings.key_pressed("down")) - float(Settings.key_pressed("up")))
 
 var bot_dir := Callable()
 
@@ -1085,8 +1088,12 @@ func hit(e: Enemy, dmg: float) -> void:
 # ---- potions ---------------------------------------------------------------
 
 func use_potion(i: int) -> void:
-	if ending or i < 0 or i >= run.potions.size():
+	if ending or i < 0 or i >= run.potions.size() or not started:
 		return
+	var pnow := Time.get_ticks_msec()
+	if pnow - _last_potion_ms < 200 or pnow - _last_play_ms < 150:
+		return
+	_last_potion_ms = pnow
 	var id: String = run.potions[i]
 	run.potions.remove_at(i)
 	Settings.unlock("potion")
@@ -1173,13 +1180,17 @@ func _draw_tutorial(c: Control) -> void:
 	ui.bar(c, Rect2(r.position.x + 14, r.end.y - 14, r.size.x - 28, 6), tut_progress(), Color(0.5, 1.0, 0.6), Color(0.1, 0.2, 0.12))
 	if tut_step >= 1 and tut_step <= 3:
 		var a := 0.5 + 0.5 * sin(elapsed * 8.0)
-		c.draw_arc(Vector2(cx, 46.0), 24.0 + 4.0 * a, 0.0, TAU, 32, Color(1, 0.9, 0.3, 0.9), 3.0)
-		ui.text(c, "ここ！", Vector2(cx - 40.0, 90.0), 14, Color(1, 0.9, 0.4, 0.6 + 0.4 * a), HORIZONTAL_ALIGNMENT_CENTER, 80.0)
+		c.draw_arc(Vector2(LANE_X, 46.0), 24.0 + 4.0 * a, 0.0, TAU, 32, Color(1, 0.9, 0.3, 0.9), 3.0)
+		ui.text(c, "ここ！", Vector2(LANE_X - 40.0, 90.0), 14, Color(1, 0.9, 0.4, 0.6 + 0.4 * a), HORIZONTAL_ALIGNMENT_CENTER, 80.0)
 
 # ---- cards -----------------------------------------------------------------
 
 func try_play(slot: int) -> void:
 	if ending or not started:
+		return
+	# Only one card at a time: ignore presses that arrive together (keys held at once).
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _last_play_ms < 150:
 		return
 	var id := deck.hand[slot]
 	if id == "":
@@ -1197,6 +1208,7 @@ func try_play(slot: int) -> void:
 		Conductor.play_sfx("miss")
 		return
 	energy -= cost
+	_last_play_ms = now_ms
 	var so := Conductor.beat_offset()
 	var a := absf(so)
 	var grade := "MISS"
@@ -1704,36 +1716,36 @@ func draw_hud(c: Control) -> void:
 			c.draw_rect(pr, Color(0.1, 0.1, 0.16, 0.6))
 			c.draw_rect(pr, Color(1, 1, 1, 0.15), false, 1.0)
 
-	# rhythm lane
+	# rhythm lane: notes come from the right and land on the ring (one side only)
 	var cx := W / 2.0
 	var ly := 46.0
-	c.draw_rect(Rect2(cx - 320, ly - 18, 640, 36), Color(0, 0, 0, 0.35))
-	c.draw_line(Vector2(cx - 300, ly), Vector2(cx + 300, ly), Color(1, 1, 1, 0.15), 2.0)
+	c.draw_rect(Rect2(LANE_X - 44, ly - 18, 570, 36), Color(0, 0, 0, 0.35))
+	c.draw_line(Vector2(LANE_X, ly), Vector2(LANE_X + 520, ly), Color(1, 1, 1, 0.15), 2.0)
 	var spb := Conductor.spb
 	var st := Conductor.song_time - Conductor.offset
 	var t0 := floorf(st / spb)
-	for k in range(-1, 5):
+	for k in range(-1, 7):
 		var dt := (t0 + k) * spb - st
 		var dx := dt * 220.0
-		var a := clampf(1.0 - absf(dx) / 320.0, 0.0, 1.0)
+		if dx < -30.0 or dx > 520.0:
+			continue
+		var a := clampf(1.0 - maxf(dx, 0.0) / 560.0, 0.15, 1.0) * clampf(1.0 + dx / 30.0, 0.0, 1.0)
 		var big := 1.0 + 0.5 * clampf(1.0 - absf(dx) / 40.0, 0.0, 1.0)
-		for s in [-1.0, 1.0]:
-			c.draw_circle(Vector2(cx + s * dx, ly), 8.0 * big, Color(0.6, 0.9, 1.0, a))
+		c.draw_circle(Vector2(LANE_X + dx, ly), 8.0 * big, Color(0.6, 0.9, 1.0, a))
 	var near := absf(Conductor.beat_offset()) <= perfect_window()
 	var hr := 15.0 + 5.0 * beat_pulse
-	c.draw_arc(Vector2(cx, ly), hr, 0.0, TAU, 32, Color(1.0, 0.9, 0.3) if near else Color(1, 1, 1, 0.6), 3.0)
-	# perfect window band
+	c.draw_arc(Vector2(LANE_X, ly), hr, 0.0, TAU, 32, Color(1.0, 0.9, 0.3) if near else Color(1, 1, 1, 0.6), 3.0)
 	var pw_px := perfect_window() * 220.0
-	c.draw_rect(Rect2(cx - pw_px, ly - 14, pw_px * 2.0, 28), Color(1.0, 0.9, 0.3, 0.08))
+	c.draw_rect(Rect2(LANE_X - pw_px, ly - 14, pw_px * 2.0, 28), Color(1.0, 0.9, 0.3, 0.08))
 
 	# where your last press landed relative to the beat (left = early, right = late)
 	if last_off_t > 0.0:
-		var mk := clampf(last_off, -0.25, 0.25) * 220.0
+		var mk := -clampf(last_off, -0.25, 0.25) * 220.0
 		var ma := minf(1.0, last_off_t * 2.0)
-		c.draw_rect(Rect2(cx + mk - 2.0, ly - 16.0, 4.0, 32.0), Color(last_off_col, ma))
-		c.draw_colored_polygon(PackedVector2Array([Vector2(cx + mk - 6.0, ly + 24.0), Vector2(cx + mk + 6.0, ly + 24.0), Vector2(cx + mk, ly + 16.0)]), Color(last_off_col, ma))
-	ui.text(c, "早い", Vector2(cx - 316.0, ly + 36.0), 11, Color(1, 1, 1, 0.3))
-	ui.text(c, "遅い", Vector2(cx + 286.0, ly + 36.0), 11, Color(1, 1, 1, 0.3))
+		c.draw_rect(Rect2(LANE_X + mk - 2.0, ly - 16.0, 4.0, 32.0), Color(last_off_col, ma))
+		c.draw_colored_polygon(PackedVector2Array([Vector2(LANE_X + mk - 6.0, ly + 24.0), Vector2(LANE_X + mk + 6.0, ly + 24.0), Vector2(LANE_X + mk, ly + 16.0)]), Color(last_off_col, ma))
+	ui.text(c, "遅い", Vector2(LANE_X - 56.0, ly + 36.0), 11, Color(1, 1, 1, 0.35))
+	ui.text(c, "早い", Vector2(LANE_X + 22.0, ly + 36.0), 11, Color(1, 1, 1, 0.35))
 	if tutorial:
 		_draw_tutorial(c)
 

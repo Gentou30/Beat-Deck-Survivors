@@ -36,6 +36,15 @@ var sel_asc := 0
 var toasts: Array = []
 var sel_long := true
 var settings_tab := 0
+var sys_menu := false
+var sys_confirm := false
+var rebind_action := ""
+var rebind_slot := 0
+var pad_hw := false
+var beat_hist: Array = []
+var beat_msg := ""
+var beat_msg_t := 0.0
+var beat_msg_col := Color.WHITE
 var map_focus := 0
 var reward_picked := -1
 var pick_preview := -1
@@ -442,6 +451,7 @@ func _begin() -> void:
 	goto(S.MENU)
 
 func _press(p: Vector2) -> void:
+	pad_hw = false
 	var id := ui.hit(p)
 	if id.begins_with("sl:"):
 		drag_id = id
@@ -465,6 +475,7 @@ func _pad_input(event: InputEvent) -> void:
 		var jb := event as InputEventJoypadButton
 		if not jb.pressed:
 			return
+		pad_hw = true
 		pad_mode = true
 		match jb.button_index:
 			JOY_BUTTON_DPAD_UP: _pad_nav(Vector2.UP)
@@ -474,6 +485,11 @@ func _pad_input(event: InputEvent) -> void:
 			JOY_BUTTON_START:
 				if state == S.BATTLE:
 					_toggle_pause()
+				elif state != S.SPLASH and state != S.SETTINGS and state != S.CALIB:
+					if sys_menu:
+						sys_menu = false
+					else:
+						_open_sys_menu()
 			_:
 				_pad_button(jb.button_index)
 	elif event is InputEventJoypadMotion:
@@ -485,6 +501,7 @@ func _pad_input(event: InputEvent) -> void:
 		if strong and not _axis_state.get(key, false):
 			_axis_state[key] = true
 			pad_mode = true
+			pad_hw = true
 			if jm.axis == JOY_AXIS_LEFT_X:
 				_pad_nav(Vector2.RIGHT if jm.axis_value > 0.0 else Vector2.LEFT)
 			else:
@@ -513,11 +530,21 @@ func _pad_button(idx: int) -> void:
 		elif not focus_id.begins_with("sl:"):
 			_click(focus_id)
 	elif idx == JOY_BUTTON_B:
-		for bid in ["deck_close", "resume", "back", "leave", "skip", "menu"]:
+		for bid in ["deck_close", "sys_no", "sys_resume", "resume", "up_cancel", "back", "leave", "skip", "menu"]:
 			for bt in ui.buttons:
 				if bt["id"] == bid:
 					_click(bid)
 					return
+
+func _default_focus(cands: Array) -> String:
+	var pri: Array = ["sys_resume", "resume", "up_ok", "start", "go", "mode:run", "skip", "leave", "event_done", "treasure_take", "rest:heal", "retry", "rw:0", "back"]
+	if state == S.REWARD and reward_picked < 0:
+		pri = ["rw:0", "skip"]
+	for pid in pri:
+		for bt in cands:
+			if bt["id"] == pid:
+				return pid
+	return ""
 
 func _pad_nav(dir: Vector2) -> void:
 	if _in_battle_play():
@@ -537,6 +564,11 @@ func _pad_nav(dir: Vector2) -> void:
 			cur_rect = bt["rect"]
 			found = true
 	if not found:
+		var pick := _default_focus(cands)
+		if pick != "":
+			focus_id = pick
+			Conductor.play_sfx("tick")
+			return
 		cands.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 			var ra: Rect2 = a["rect"]
 			var rb: Rect2 = b["rect"]
@@ -661,30 +693,101 @@ func _slide(id: String, x: float) -> void:
 		Settings.sfx_vol = f
 	Settings.apply()
 
+func _kb_nav_state() -> bool:
+	if sys_menu or sys_confirm or deck_view:
+		return true
+	if state == S.BATTLE:
+		return paused
+	return state in [S.MENU, S.MODE, S.SETTINGS, S.RECORDS, S.REWARD, S.REST, S.PICK, S.SHOP, S.EVENT, S.TREASURE, S.END]
+
+func _open_sys_menu() -> void:
+	sys_menu = true
+	sys_confirm = false
+	focus_id = ""
+	Conductor.play_sfx("open")
+
 func _key(k: int) -> void:
-	if deck_view and (k == KEY_ESCAPE):
+	pad_hw = false
+	# key re-binding capture
+	if rebind_action != "":
+		if k != KEY_ESCAPE:
+			Settings.bind(rebind_action, rebind_slot, k)
+			Settings.save_cfg()
+		rebind_action = ""
+		Conductor.play_sfx("select")
+		return
+	# overlays first
+	if sys_confirm:
+		if k == KEY_ESCAPE:
+			sys_confirm = false
+			return
+	elif sys_menu:
+		if k == KEY_ESCAPE:
+			sys_menu = false
+			return
+	elif deck_view and k == KEY_ESCAPE:
 		deck_view = false
 		return
+	if state == S.PICK and pick_preview >= 0 and not sys_menu and not sys_confirm:
+		if k == KEY_ENTER or k == KEY_SPACE or k == KEY_Y:
+			_click("up_ok")
+			return
+		if k == KEY_ESCAPE or k == KEY_BACKSPACE:
+			_click("up_cancel")
+			return
+	# generic arrow / Enter / Space navigation for every menu-like screen
+	if _kb_nav_state():
+		var nd := Vector2.ZERO
+		match k:
+			KEY_UP: nd = Vector2.UP
+			KEY_DOWN: nd = Vector2.DOWN
+			KEY_LEFT: nd = Vector2.LEFT
+			KEY_RIGHT: nd = Vector2.RIGHT
+		if nd != Vector2.ZERO:
+			pad_mode = true
+			_pad_nav(nd)
+			return
+		if k == KEY_ENTER or k == KEY_SPACE or k == KEY_KP_ENTER:
+			if state == S.SETTINGS and k == KEY_SPACE and not sys_menu and not sys_confirm and not deck_view:
+				_beat_tap()
+				return
+			pad_mode = true
+			if focus_id == "":
+				_pad_nav(Vector2.DOWN)
+			elif not focus_id.begins_with("sl:"):
+				_click(focus_id)
+			return
+		if k == KEY_ESCAPE:
+			if state == S.BATTLE and paused:
+				_toggle_pause()
+			return
 	match state:
-		S.MENU:
-			var n := _menu_ids().size()
-			if k == KEY_UP:
-				menu_idx = (menu_idx + n - 1) % n
-				Conductor.play_sfx("tick")
-			elif k == KEY_DOWN:
-				menu_idx = (menu_idx + 1) % n
-				Conductor.play_sfx("tick")
-			elif k == KEY_ENTER or k == KEY_SPACE:
-				_click(_menu_ids()[menu_idx])
-		S.MODE, S.CHAR:
+		S.MODE:
 			if k == KEY_ESCAPE:
 				_click("back")
-			elif state == S.CHAR and (k == KEY_LEFT or k == KEY_RIGHT):
-				sel_char = (sel_char + (1 if k == KEY_RIGHT else 2)) % 3
+		S.CHAR:
+			var unl := Settings.chars_unlocked()
+			if k == KEY_ESCAPE:
+				_click("back")
+			elif k == KEY_LEFT or k == KEY_RIGHT:
+				var n := Characters.ORDER.size()
+				for tries in n:
+					sel_char = (sel_char + (1 if k == KEY_RIGHT else n - 1)) % n
+					if Characters.ORDER[sel_char] in unl:
+						break
 				Conductor.play_sfx("tick")
-			elif state == S.CHAR and (k == KEY_ENTER or k == KEY_SPACE):
+			elif k == KEY_UP:
+				_click("asc+")
+			elif k == KEY_DOWN:
+				_click("asc-")
+			elif k == KEY_L:
+				_click("len")
+			elif k == KEY_ENTER or k == KEY_SPACE:
 				_click("go")
 		S.SETTINGS:
+			if k == KEY_ESCAPE:
+				_click("back")
+		S.RECORDS:
 			if k == KEY_ESCAPE:
 				_click("back")
 		S.CALIB:
@@ -693,30 +796,31 @@ func _key(k: int) -> void:
 			elif k == KEY_ESCAPE:
 				_click("back")
 		S.BATTLE:
-			if k == KEY_ESCAPE:
+			var act := Settings.action_for_key(k)
+			if k == KEY_ESCAPE or act == "pause":
 				_toggle_pause()
-			elif not paused and k >= KEY_1 and k <= KEY_5:
-				battle.try_play(k - KEY_1)
-			elif not paused and k >= KEY_6 and k <= KEY_8:
-				battle.use_potion(k - KEY_6)
+			elif act.begins_with("card"):
+				battle.try_play(int(act.substr(4)) - 1)
+			elif act.begins_with("potion"):
+				battle.use_potion(int(act.substr(6)) - 1)
 		S.REWARD:
 			if k >= KEY_1 and k <= KEY_3:
 				_click("rw:%d" % (k - KEY_1))
-			elif k == KEY_SPACE or k == KEY_S or k == KEY_ENTER:
+			elif k == KEY_S:
 				_click("skip")
+			elif k == KEY_ESCAPE:
+				_open_sys_menu()
 		S.PICK:
-			if pick_preview >= 0:
-				if k == KEY_ENTER or k == KEY_SPACE or k == KEY_Y:
-					_click("up_ok")
-				elif k == KEY_ESCAPE or k == KEY_BACKSPACE:
-					_click("up_cancel")
-			elif k == KEY_ESCAPE and pick_mode != "remove_free":
-				_click("back")
+			if k == KEY_ESCAPE:
+				if pick_mode != "remove_free":
+					_click("back")
 		S.MAP:
 			var av := _map_avail()
-			if av.is_empty():
+			if k == KEY_ESCAPE:
+				_open_sys_menu()
+			elif av.is_empty():
 				return
-			if k == KEY_LEFT or k == KEY_A:
+			elif k == KEY_LEFT or k == KEY_A:
 				map_focus = (map_focus + av.size() - 1) % av.size()
 				Conductor.play_sfx("tick")
 			elif k == KEY_RIGHT or k == KEY_D:
@@ -728,9 +832,31 @@ func _key(k: int) -> void:
 			elif k >= KEY_1 and k <= KEY_6 and (k - KEY_1) < av.size():
 				Conductor.play_sfx("select")
 				_enter_node(av[k - KEY_1])
-		S.END:
-			if k == KEY_ENTER:
-				_click("menu")
+		S.REST, S.SHOP, S.EVENT, S.TREASURE, S.END:
+			if k == KEY_ESCAPE and state != S.END:
+				_open_sys_menu()
+
+## Settings-screen beat tester: shows the judgement and the signed ms offset of each press.
+func _beat_tap() -> void:
+	var off := Conductor.beat_offset() * 1000.0
+	var a := absf(off) / 1000.0
+	var pw := 0.07 + 0.03 * Settings.assist
+	var gw := 0.14 + 0.03 * Settings.assist
+	var g := "MISS"
+	beat_msg_col = Color(0.9, 0.35, 0.35)
+	if a <= pw:
+		g = "PERFECT"
+		beat_msg_col = Color(1.0, 0.9, 0.3)
+	elif a <= gw:
+		g = "GOOD"
+		beat_msg_col = Color(0.5, 0.9, 1.0)
+	beat_hist.append(off)
+	if beat_hist.size() > 8:
+		beat_hist.pop_front()
+	var tag := "" if absf(off) < 3.0 else (Loc.t(" 遅め") if off > 0.0 else Loc.t(" 早め"))
+	beat_msg = "%s  %+d ms%s" % [g, int(round(off)), tag]
+	beat_msg_t = 2.5
+	Conductor.play_sfx(g.to_lower())
 
 func _toggle_pause() -> void:
 	paused = not paused
@@ -828,6 +954,47 @@ func _click(id: String) -> void:
 			settings_tab = 0
 		"tab:game":
 			settings_tab = 1
+		"tab:keys":
+			settings_tab = 2
+		"keys_reset":
+			Settings.reset_keys()
+			Settings.save_cfg()
+		"beat_tap":
+			_beat_tap()
+		"avg_apply":
+			if beat_hist.size() >= 3:
+				var sum := 0.0
+				for v in beat_hist:
+					sum += v
+				Settings.offset_ms = clampi(Settings.offset_ms + int(round(sum / beat_hist.size())), -200, 200)
+				Settings.save_cfg()
+				beat_hist.clear()
+				beat_msg = ""
+		"sys_open":
+			_open_sys_menu()
+		"sys_resume":
+			sys_menu = false
+			sys_confirm = false
+		"sys_settings":
+			sys_menu = false
+			settings_return = state
+			goto(S.SETTINGS)
+		"sys_title":
+			sys_confirm = true
+			focus_id = ""
+		"sys_no":
+			sys_confirm = false
+			focus_id = ""
+		"sys_yes":
+			sys_menu = false
+			sys_confirm = false
+			deck_view = false
+			if paused:
+				paused = false
+				Conductor.set_paused(false)
+			if battle:
+				battle.dispose()
+			goto(S.MENU)
 		"clap":
 			Settings.clap_on = not Settings.clap_on
 			Settings.save_cfg()
@@ -905,10 +1072,23 @@ func _click(id: String) -> void:
 			_click_prefixed(id)
 
 func _click_prefixed(id: String) -> void:
-	if id.begins_with("rw:"):
-		if reward_picked >= 0:
-			return
+	if id.begins_with("keybind:"):
+		var parts := id.split(":")
+		rebind_action = parts[1]
+		rebind_slot = int(parts[2])
+		Conductor.play_sfx("open")
+	elif id.begins_with("rw:"):
+		# choose / switch / cancel the reward card until "continue" is pressed
 		var i := int(id.substr(3))
+		if reward_picked >= 0:
+			var old_id: String = reward_cards[reward_picked]
+			var di := run.deck.rfind(old_id)
+			if di >= 0:
+				run.deck.remove_at(di)
+			if reward_picked == i:
+				reward_picked = -1
+				Conductor.play_sfx("back" if false else "tick")
+				return
 		run.deck.append(reward_cards[i])
 		reward_picked = i
 		Conductor.play_sfx("win")
@@ -991,6 +1171,7 @@ func _process(delta: float) -> void:
 	t += delta
 	menu_pulse = maxf(0.0, menu_pulse - delta * 4.0)
 	act_banner = maxf(0.0, act_banner - delta)
+	beat_msg_t = maxf(0.0, beat_msg_t - delta)
 	for tt in toasts:
 		tt["t"] -= delta
 	toasts = toasts.filter(func(x: Dictionary) -> bool: return x["t"] > 0.0)
@@ -1038,7 +1219,7 @@ func _draw() -> void:
 func draw_hud(c: Control) -> void:
 	ui.begin(c, get_process_delta_time())
 	ui.touch = touch_mode
-	ui.pad = pad_mode
+	ui.pad = pad_hw
 	ui.focus_id = focus_id if pad_mode else ""
 	match state:
 		S.SPLASH: _draw_splash(c)
@@ -1064,6 +1245,12 @@ func draw_hud(c: Control) -> void:
 		S.END: _draw_end(c)
 	if deck_view:
 		_draw_deck_overlay(c)
+	if sys_menu and state != S.BATTLE:
+		ui.buttons.clear()
+		_draw_sys_menu(c)
+	if sys_confirm:
+		ui.buttons.clear()
+		_draw_confirm(c)
 	_draw_toasts(c)
 	if state == S.BATTLE and not paused:
 		_draw_joystick(c)
@@ -1226,9 +1413,9 @@ func _draw_char(c: Control) -> void:
 	if go_ok:
 		c.draw_rect(Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0).grow(6.0 + 6.0 * gp2), Color(1.0, 0.85, 0.3, 0.25 + 0.25 * gp2))
 		c.draw_rect(Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0).grow(4.0 + 3.0 * gp2), Color(1.0, 0.95, 0.6, 0.6 + 0.4 * gp2), false, 4.0)
-		ui.text(c, "▶", Vector2(W / 2.0 - 215.0 - 8.0 * gp2, H - 50.0), 34, Color(1.0, 0.9, 0.4))
-		ui.text(c, "◀", Vector2(W / 2.0 + 180.0 + 8.0 * gp2, H - 50.0), 34, Color(1.0, 0.9, 0.4))
-		ui.text(c, "キャラを決めたら出発！(Enter)", Vector2(0, H - 102.0 - 4.0 * gp2), 15, Color(1.0, 0.95, 0.6), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.arrow(c, Vector2(W / 2.0 - 195.0 - 8.0 * gp2, H - 60.0), 1, 34.0, Color(1.0, 0.9, 0.4))
+		ui.arrow(c, Vector2(W / 2.0 + 195.0 + 8.0 * gp2, H - 60.0), -1, 34.0, Color(1.0, 0.9, 0.4))
+		ui.text(c, "キャラを決めたら出発！(Enter)   ←→キャラ  ↑↓アセンション  Lで長さ切替", Vector2(0, H - 102.0 - 4.0 * gp2), 14, Color(1.0, 0.95, 0.6), HORIZONTAL_ALIGNMENT_CENTER, W)
 	ui.button(c, "go", Rect2(W / 2.0 - 160.0, H - 90.0, 320.0, 60.0), "出発！", go_ok, Color(1.0, 0.8, 0.35), 30)
 
 func _draw_records(c: Control) -> void:
@@ -1280,11 +1467,49 @@ func _arrow_row(c: Control, id_minus: String, id_plus: String, y: float, label: 
 	ui.text(c, value, Vector2(SL_X + 60.0, y + 26.0), 17, Color(1, 0.9, 0.4), HORIZONTAL_ALIGNMENT_CENTER, 300.0)
 	ui.button(c, id_plus, Rect2(SL_X + 364.0, y, 56.0, 36.0), "▶", true, Color(0.6, 0.6, 0.9), 20)
 
+const KEY_ROWS_L := ["card1", "card2", "card3", "card4", "card5", "potion1", "potion2"]
+const KEY_ROWS_R := ["potion3", "potion4", "up", "down", "left", "right", "pause"]
+
+func _action_label(a: String) -> String:
+	if a.begins_with("card"):
+		return Loc.t("カード%d") % int(a.substr(4))
+	if a.begins_with("potion"):
+		return Loc.t("ポーション%d") % int(a.substr(6))
+	return {"up": Loc.t("上へ移動"), "down": Loc.t("下へ移動"), "left": Loc.t("左へ移動"), "right": Loc.t("右へ移動"), "pause": Loc.t("ポーズ")}[a]
+
+func _key_col(c: Control, rows: Array, x0: float) -> void:
+	for i in rows.size():
+		var act: String = rows[i]
+		var y := 190.0 + i * 52.0
+		ui.text(c, _action_label(act), Vector2(x0, y + 26.0), 17, Color.WHITE)
+		for slot in 2:
+			var waiting := rebind_action == act and rebind_slot == slot
+			var lab := Loc.t("キーを押す…") if waiting else Settings.key_name(Settings.keymap[act][slot])
+			ui.button(c, "keybind:%s:%d" % [act, slot], Rect2(x0 + 150.0 + slot * 150.0, y, 140.0, 38.0), lab, true, Color(1.0, 0.85, 0.3) if waiting else Color(0.6, 0.65, 0.95), 15)
+
+func _draw_beat_tester(c: Control) -> void:
+	var cx := 1110.0
+	var cy := 230.0
+	ui.button_hit(c, "beat_tap", Rect2(cx - 70.0, cy - 70.0, 140.0, 140.0))
+	c.draw_circle(Vector2(cx, cy), 36.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
+	c.draw_arc(Vector2(cx, cy), 36.0, 0.0, TAU, 32, Color(1, 1, 1, 0.8 if ui.is_hover("beat_tap") else 0.6), 3.0)
+	ui.text(c, "ビートを試す", Vector2(cx - 100.0, cy + 66.0), 15, Color(0.9, 0.9, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 200.0)
+	ui.text(c, "Space / クリック", Vector2(cx - 100.0, cy + 86.0), 12, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, 200.0)
+	if beat_msg_t > 0.0:
+		ui.text(c, beat_msg, Vector2(cx - 120.0, cy + 118.0), 17, Color(beat_msg_col, minf(1.0, beat_msg_t * 2.0)), HORIZONTAL_ALIGNMENT_CENTER, 240.0)
+	if beat_hist.size() > 0:
+		var sum := 0.0
+		for v in beat_hist:
+			sum += v
+		ui.text(c, Loc.t("平均 %+d ms  (%d回)") % [int(round(sum / beat_hist.size())), beat_hist.size()], Vector2(cx - 120.0, cy + 144.0), 14, Color(0.9, 0.9, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 240.0)
+		ui.button(c, "avg_apply", Rect2(cx - 115.0, cy + 156.0, 230.0, 34.0), "平均をオフセットに反映", beat_hist.size() >= 3, Color(0.9, 0.7, 0.3), 13)
+
 func _draw_settings(c: Control) -> void:
 	_bg(c)
-	ui.center(c, "設定", 66.0, 38, Color(1, 0.9, 0.6))
-	ui.button(c, "tab:audio", Rect2(W / 2.0 - 250.0, 82.0, 240.0, 40.0), "音声・リズム", true, Color(1.0, 0.8, 0.35) if settings_tab == 0 else Color(0.55, 0.5, 0.95), 18)
-	ui.button(c, "tab:game", Rect2(W / 2.0 + 10.0, 82.0, 240.0, 40.0), "ゲーム", true, Color(1.0, 0.8, 0.35) if settings_tab == 1 else Color(0.55, 0.5, 0.95), 18)
+	ui.center(c, "設定", 62.0, 36, Color(1, 0.9, 0.6))
+	var tabs := [["tab:audio", "音声・リズム"], ["tab:game", "ゲーム"], ["tab:keys", "キー設定"]]
+	for i in 3:
+		ui.button(c, tabs[i][0], Rect2(W / 2.0 - 375.0 + i * 260.0, 78.0, 240.0, 40.0), tabs[i][1], true, Color(1.0, 0.8, 0.35) if settings_tab == i else Color(0.55, 0.5, 0.95), 18)
 	var x := 290.0
 	if settings_tab == 0:
 		ui.text(c, "音楽音量", Vector2(x, 170), 20, Color.WHITE)
@@ -1309,19 +1534,23 @@ func _draw_settings(c: Control) -> void:
 		ui.button(c, "off+", Rect2(SL_X + 200.0, 468.0, 56.0, 36.0), "＋", true, Color(0.6, 0.6, 0.9), 22)
 		ui.button(c, "calib", Rect2(SL_X + 270.0, 468.0, 220.0, 36.0), "自動キャリブレーション", true, Color(0.9, 0.7, 0.3), 15)
 		ui.text(c, "クラップは戦闘・チュートリアル・この画面で拍を知らせます。戦闘開始時は4拍のカウントダウン付き。", Vector2(0, 540), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
-		ui.text(c, "押すのが遅れる/早いと感じたら調整。ずれが大きい時はキャリブレーションが便利です。", Vector2(0, 562), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
-	else:
+		ui.text(c, "右の円をクリック/Spaceで押すと、判定とズレ(ms)を確認できます。", Vector2(0, 562), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+		_draw_beat_tester(c)
+	elif settings_tab == 1:
 		_toggle_btn(c, "shake", Rect2(290, 190, 340, 44), "画面揺れ", Settings.shake)
 		_toggle_btn(c, "flash", Rect2(650, 190, 340, 44), "フラッシュ軽減", Settings.reduce_flash)
 		_toggle_btn(c, "fullscreen", Rect2(290, 250, 340, 44), "フルスクリーン", Settings.fullscreen)
 		var al := ["オフ", "広い", "とても広い"]
 		_toggle_btn(c, "assist", Rect2(650, 250, 340, 44), "判定アシスト", Settings.assist > 0, al[Settings.assist])
 		ui.button(c, "lang", Rect2(290, 320, 700, 44), "言語 / Language:  " + ("日本語" if Settings.lang == "ja" else "English"), true, Color(1.0, 0.8, 0.35), 18)
-	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 620.0, 240.0, 48.0), "もどる", true, Color(0.55, 0.5, 0.95), 24)
-	var cx := 1110.0
-	c.draw_circle(Vector2(cx, 230), 30.0 + 22.0 * menu_pulse, Color(1, 0.9, 0.4, 0.15 + 0.4 * menu_pulse))
-	c.draw_arc(Vector2(cx, 230), 30.0, 0.0, TAU, 32, Color(1, 1, 1, 0.7), 3.0)
-	ui.text(c, "ビート", Vector2(cx - 50.0, 290), 16, Color(0.8, 0.8, 0.95), HORIZONTAL_ALIGNMENT_CENTER, 100.0)
+	else:
+		ui.text(c, "キー1", Vector2(150.0 + 120.0 - 20.0, 172.0), 13, Color(0.8, 0.8, 0.9))
+		ui.text(c, "キー2", Vector2(150.0 + 270.0 - 20.0 + 40.0, 172.0), 13, Color(0.8, 0.8, 0.9))
+		_key_col(c, KEY_ROWS_L, 100.0)
+		_key_col(c, KEY_ROWS_R, 700.0)
+		ui.text(c, "ボタンを押してから割り当てたいキーを押します(Escでキャンセル)。同じキーは他の操作から外れます。", Vector2(0, 566), 13, Color(0.7, 0.7, 0.85), HORIZONTAL_ALIGNMENT_CENTER, W)
+		ui.button(c, "keys_reset", Rect2(W / 2.0 - 120.0, 580.0, 240.0, 36.0), "初期設定に戻す", true, Color(0.9, 0.6, 0.4), 16)
+	ui.button(c, "back", Rect2(W / 2.0 - 120.0, 628.0, 240.0, 44.0), "もどる", true, Color(0.55, 0.5, 0.95), 22)
 
 func _draw_calib(c: Control) -> void:
 	_bg(c)
@@ -1358,7 +1587,7 @@ func _run_bar(c: Control, show_deck := true) -> void:
 		var dt := Loc.t("★ デイリー: %s") % Loc.t(RunState.MOD_NAMES[run.mod_id])
 		ui.text(c, dt, Vector2(0, 47), 14, Color(1.0, 0.85, 0.3), HORIZONTAL_ALIGNMENT_CENTER, W)
 	for i in run.potion_slots():
-		var pr := Rect2(W - 206.0 - (run.potion_slots() - i) * 40.0, 10, 34, 34)
+		var pr := Rect2(W - 282.0 - (run.potion_slots() - i) * 40.0, 10, 34, 34)
 		if i < run.potions.size():
 			var pd: Dictionary = Potions.DB[run.potions[i]]
 			var pc: Color = pd["color"]
@@ -1370,7 +1599,8 @@ func _run_bar(c: Control, show_deck := true) -> void:
 			c.draw_rect(pr, Color(0.1, 0.1, 0.16, 0.6))
 			c.draw_rect(pr, Color(1, 1, 1, 0.15), false, 1.0)
 	if show_deck:
-		ui.button(c, "deck", Rect2(W - 190, 8, 170, 38), Loc.t("デッキ (%d)") % run.deck.size(), true, Color(0.5, 0.7, 1.0), 18)
+		ui.button(c, "deck", Rect2(W - 224, 8, 160, 38), Loc.t("デッキ (%d)") % run.deck.size(), true, Color(0.5, 0.7, 1.0), 18)
+	ui.button(c, "sys_open", Rect2(W - 54, 8, 44, 38), "≡", true, Color(0.7, 0.7, 0.9), 22)
 
 func _relic_tips(c: Control) -> void:
 	for i in run.potions.size():
@@ -1460,17 +1690,15 @@ func _draw_reward(c: Control) -> void:
 	_bg(c)
 	_run_bar(c)
 	ui.center(c, "勝利！", 110.0, 52, Color(1, 0.9, 0.4))
-	ui.center(c, Loc.t("+%d G 獲得  /  カードを1枚選ぼう") % reward_gold if reward_picked < 0 else Loc.t("+%d G 獲得") % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
+	ui.center(c, Loc.t("+%d G 獲得  /  カードを1枚選ぼう") % reward_gold if reward_picked < 0 else Loc.t("+%d G 獲得  /  別のカードを押すと変更できます") % reward_gold, 150.0, 22, Color(1, 0.85, 0.4))
 	for i in reward_cards.size():
 		var rr := Rect2(W / 2.0 - 255.0 + i * 180.0, 200.0, 160.0, 250.0)
-		if reward_picked < 0:
-			ui.card(c, reward_cards[i], rr, str(i + 1), true, false, "rw:%d" % i)
-		elif i == reward_picked:
-			ui.card(c, reward_cards[i], rr, "", true, true)
+		if i == reward_picked:
+			ui.card(c, reward_cards[i], rr, str(i + 1), true, true, "rw:%d" % i)
 			c.draw_rect(rr.grow(5.0), Color(1, 0.95, 0.4, 0.6 + 0.4 * sin(t * 6.0)), false, 4.0)
-			ui.text(c, "獲得！", Vector2(rr.position.x, rr.position.y - 8.0), 20, Color(1, 0.95, 0.4), HORIZONTAL_ALIGNMENT_CENTER, rr.size.x)
+			ui.text(c, "獲得！(もう一度押すと取消)", Vector2(rr.position.x - 10.0, rr.position.y - 8.0), 14, Color(1, 0.95, 0.4), HORIZONTAL_ALIGNMENT_CENTER, rr.size.x + 20.0)
 		else:
-			ui.card(c, reward_cards[i], rr, "", false, false)
+			ui.card(c, reward_cards[i], rr, str(i + 1), true, false, "rw:%d" % i)
 	if reward_relic != "":
 		var d: Dictionary = Relics.DB[reward_relic]
 		ui.panel(c, Rect2(W / 2.0 - 260.0, 485.0, 520.0, 56.0), Color(0.1, 0.08, 0.04, 0.95), Color(1, 0.85, 0.4))
@@ -1659,12 +1887,29 @@ func _draw_treasure(c: Control) -> void:
 		ui.center(c, "中は空っぽだった…", 300.0, 26, Color.WHITE)
 	ui.button(c, "treasure_take", Rect2(W / 2.0 - 120.0, 560.0, 240.0, 56.0), "受け取る", true, Color(1.0, 0.8, 0.3), 24)
 
+func _draw_sys_menu(c: Control) -> void:
+	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.7))
+	ui.center(c, "メニュー", 190.0, 52, Color(1, 0.95, 0.8))
+	ui.button(c, "sys_resume", Rect2(W / 2.0 - 160.0, 250.0, 320.0, 56.0), "再開", true, Color(0.5, 0.9, 0.6), 26)
+	ui.button(c, "sys_settings", Rect2(W / 2.0 - 160.0, 320.0, 320.0, 56.0), "設定", true, Color(0.55, 0.5, 0.95), 26)
+	ui.button(c, "sys_title", Rect2(W / 2.0 - 160.0, 390.0, 320.0, 56.0), "タイトルへ戻る", true, Color(0.9, 0.5, 0.4), 24)
+	ui.center(c, "Esc で閉じる", 480.0, 14, Color(0.8, 0.8, 0.9, 0.7))
+
+func _draw_confirm(c: Control) -> void:
+	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.78))
+	ui.panel(c, Rect2(W / 2.0 - 300.0, 240.0, 600.0, 230.0), Color(0.08, 0.05, 0.1, 0.98), Color(1, 0.5, 0.4))
+	ui.center(c, "タイトルに戻りますか？", 300.0, 30, Color(1, 0.9, 0.7))
+	ui.center(c, "進行中のランは失われます。", 345.0, 18, Color(1, 0.7, 0.6))
+	ui.button(c, "sys_yes", Rect2(W / 2.0 - 260.0, 390.0, 240.0, 52.0), "はい", true, Color(0.9, 0.4, 0.4), 22)
+	ui.button(c, "sys_no", Rect2(W / 2.0 + 20.0, 390.0, 240.0, 52.0), "いいえ", true, Color(0.5, 0.9, 0.6), 22)
+
 func _draw_pause(c: Control) -> void:
 	c.draw_rect(Rect2(0, 0, W, H), Color(0, 0, 0, 0.65))
 	ui.center(c, "ポーズ", 200.0, 56, Color(1, 0.95, 0.8))
 	ui.button(c, "resume", Rect2(W / 2.0 - 160.0, 270.0, 320.0, 56.0), "再開", true, Color(0.5, 0.9, 0.6), 26)
 	ui.button(c, "p_settings", Rect2(W / 2.0 - 160.0, 340.0, 320.0, 56.0), "設定", true, Color(0.55, 0.5, 0.95), 26)
 	ui.button(c, "abandon", Rect2(W / 2.0 - 160.0, 410.0, 320.0, 56.0), "あきらめる", true, Color(0.9, 0.4, 0.4), 26)
+	ui.button(c, "sys_title", Rect2(W / 2.0 - 160.0, 480.0, 320.0, 56.0), "タイトルへ戻る", true, Color(0.9, 0.5, 0.4), 24)
 
 func _draw_end(c: Control) -> void:
 	_bg(c, Color(0.05, 0.1, 0.06) if end_won else Color(0.12, 0.04, 0.05))
@@ -1721,6 +1966,12 @@ func _debug_screen(sname: String) -> void:
 		"mode": state = S.MODE
 		"char": state = S.CHAR
 		"settings": state = S.SETTINGS
+		"keys":
+			state = S.SETTINGS
+			settings_tab = 2
+		"sysmenu":
+			state = S.MAP
+			sys_menu = true
 		"records": state = S.RECORDS
 		"map": state = S.MAP
 		"reward":
@@ -1890,4 +2141,22 @@ func _padtest() -> void:
 	for i in 30:
 		await get_tree().process_frame
 	print("PADTEST state after B=", S.keys()[state])
+	_beat_tap()
+	print("PADTEST beat tap -> ", beat_msg)
+	Settings.bind("card1", 1, KEY_Q)
+	print("PADTEST bind Q ->", Settings.action_for_key(KEY_Q), " card1 keys=", Settings.keymap["card1"])
+	Settings.bind("potion1", 0, KEY_Q)
+	print("PADTEST rebind steals key ->", Settings.action_for_key(KEY_Q), Settings.keymap["card1"])
+	Settings.reset_keys()
+	# one-card-at-a-time lockout
+	_start_battle("tutorial")
+	for i in 400:
+		await get_tree().process_frame
+		if battle.started:
+			break
+	var p0 := battle.plays
+	battle.try_play(0)
+	battle.try_play(1)
+	battle.try_play(2)
+	print("PADTEST simultaneous presses -> plays added=", battle.plays - p0, " (started=", battle.started, ")")
 	get_tree().quit()
